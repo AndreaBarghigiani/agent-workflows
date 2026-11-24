@@ -1,0 +1,3 @@
+# Retired v1 override example. Native setup uses .agents/memory/config.toml.
+# Choose the client MCP server name in that local routing file.
+# No backend, file_root or NAS mount configuration is needed.

@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "services": [
+    {
+      "id": "issue-tracker",
+      "purpose": "Read and update the project's issue tracker during issue workflows.",
+      "required": true,
+      "workflows": ["*"],
+      "guidance": [
+        "docs/mcp-requirements.md",
+        "docs/integrations.md"
+      ],
+      "connection": {
+        "type": "remote",
+        "url": "https://tracker.example.test/mcp",
+        "auth": {
+          "mechanism": "api-key",
+          "credential_ref": "TRACKER_API_TOKEN"
+        }
+      },
+      "verification": {
+        "description": "Fetch one open issue by number through the read API; no writes.",
+        "read_only": true
+      }
+    },
+    {
+      "id": "basic-memory",
+      "purpose": "Persistent project notes shared across sessions, machines and clients.",
+      "required": true,
+      "workflows": ["*"],
+      "guidance": [
+        ".agents/skills/setup-basic-memory/references/client-connection.md",
+        "docs/memory/connections.md"
+      ],
+      "connection": {
+        "type": "remote",
+        "local_config_ref": "machine-local profile $XDG_CONFIG_HOME/agent-workflows/memory-connection.toml (endpoint and bearer-token env-var name)"
+      },
+      "verification": {
+        "description": "A native read-only query against the configured memory project, per the client-connection reference; no writes.",
+        "read_only": true
+      }
+    },
+    {
+      "id": "local-lint",
+      "purpose": "Project lint and format checks exposed by a locally launched stdio server.",
+      "required": false,
+      "workflows": ["implement-issue"],
+      "guidance": [
+        "docs/mcp-requirements.md"
+      ],
+      "connection": {
+        "type": "stdio",
+        "command_ref": "LINT_MCP_COMMAND"
+      },
+      "verification": {
+        "description": "List the server's lint tools and run one read-only check on a committed file.",
+        "read_only": true
+      }
+    }
+  ]
+}

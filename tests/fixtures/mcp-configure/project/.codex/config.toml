@@ -1,0 +1,25 @@
+model = "gpt-5"
+
+[mcp_servers.memory]
+url = "https://memory.example.test/mcp/"
+
+[mcp_servers.tracker]
+url = "https://tracker.example.test/mcp"
+bearer_token_env_var = "TRACKER_API_TOKEN"
+
+[mcp_servers.lint]
+command = "lint-mcp"
+args = ["--stdio"]
+
+[mcp_servers.lint.env]
+LINT_BACKEND_TOKEN = "SECRET_SENTINEL-do-not-emit"
+
+[mcp_servers.experimental]
+url = "https://docs.example.test/mcp"
+websocket_url = "wss://docs.example.test/ws"
+
+[mcp_servers.unrelated]
+url = "https://other.example.test/mcp"
+
+[mcp_servers.unrelated.http_headers]
+X-Api-Key = "SECRET_SENTINEL-do-not-emit"

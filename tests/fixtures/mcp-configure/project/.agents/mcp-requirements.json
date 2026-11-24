@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "services": [
+    {
+      "id": "basic-memory",
+      "purpose": "Persistent project notes shared across sessions, machines and clients.",
+      "required": true,
+      "workflows": ["*"],
+      "guidance": ["docs/guide.md"],
+      "connection": {
+        "type": "remote",
+        "local_config_ref": "machine-local memory profile"
+      },
+      "verification": {
+        "description": "A native read-only query against the configured memory project; no writes.",
+        "read_only": true
+      }
+    },
+    {
+      "id": "issue-tracker",
+      "purpose": "Read and update the project's issue tracker during issue workflows.",
+      "required": true,
+      "workflows": ["*"],
+      "guidance": ["docs/guide.md"],
+      "connection": {
+        "type": "remote",
+        "url": "https://tracker.example.test/mcp",
+        "auth": {
+          "mechanism": "api-key",
+          "credential_ref": "TRACKER_API_TOKEN"
+        }
+      },
+      "verification": {
+        "description": "Fetch one open issue by number through the read API; no writes.",
+        "read_only": true
+      }
+    },
+    {
+      "id": "local-lint",
+      "purpose": "Project lint checks exposed by a locally launched stdio server.",
+      "required": false,
+      "workflows": ["implement-issue"],
+      "guidance": ["docs/guide.md"],
+      "connection": {
+        "type": "stdio",
+        "command_ref": "LINT_MCP_COMMAND"
+      },
+      "credential_refs": ["LINT_BACKEND_TOKEN"],
+      "verification": {
+        "description": "List the server's lint tools and run one read-only check.",
+        "read_only": true
+      }
+    },
+    {
+      "id": "docs-api",
+      "purpose": "Project documentation search over a remote endpoint.",
+      "required": false,
+      "workflows": ["*"],
+      "guidance": ["docs/guide.md"],
+      "connection": {
+        "type": "remote",
+        "url": "https://docs.example.test/mcp"
+      },
+      "verification": {
+        "description": "One read-only search against the docs endpoint.",
+        "read_only": true
+      }
+    },
+    {
+      "id": "docs-search",
+      "purpose": "Federated documentation search with no local registration yet.",
+      "required": false,
+      "workflows": ["*"],
+      "guidance": ["docs/guide.md"],
+      "connection": {
+        "type": "remote",
+        "url": "https://search.example.test/mcp"
+      },
+      "verification": {
+        "description": "One read-only search against the search endpoint.",
+        "read_only": true
+      }
+    },
+    {
+      "id": "declared-only",
+      "purpose": "A requirement declared without connection details.",
+      "required": false,
+      "workflows": ["*"],
+      "guidance": ["docs/guide.md"],
+      "verification": {
+        "description": "Verify the service once a connection exists.",
+        "read_only": true
+      }
+    }
+  ]
+}

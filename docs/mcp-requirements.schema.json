@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Project MCP requirements",
+  "description": "Consumer-owned .agents/mcp-requirements.json: a versioned declaration of the MCP services a project's workflows need. The manifest carries identities and references only — credential values, OAuth state, absolute machine paths and observed connection status never appear in it; additionalProperties is false throughout so value-bearing fields cannot hide, and reference fields reject absolute paths, command lines and parameterized URLs. scripts/mcp_requirements.ts implements these checks in plain TypeScript; guidance path resolution and identity uniqueness are supplemental repo-dependent checks the schema cannot express.",
+  "type": "object",
+  "properties": {
+    "version": {
+      "const": 1,
+      "description": "Manifest contract version; unsupported versions produce an actionable diagnostic."
+    },
+    "services": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/service" }
+    }
+  },
+  "required": ["version", "services"],
+  "additionalProperties": false,
+  "$defs": {
+    "service": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$(?![\\s\\S])",
+          "description": "Stable service identity, unique within the manifest and distinct from any client registration name."
+        },
+        "purpose": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "[^\\t-\\r\\x1c-\\x1f \\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]",
+          "description": "What the service is for in this project."
+        },
+        "required": {
+          "type": "boolean",
+          "description": "Whether workflows this service applies to are blocked when it is unavailable; optional services never block."
+        },
+        "workflows": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^(\\*|[a-z][a-z0-9-]*)$(?![\\s\\S])"
+          },
+          "description": "Workflow names the requirement applies to; [\"*\"] means project-wide applicability."
+        },
+        "guidance": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Repo-relative paths to existing project documentation covering usage and account/project constraints — references, not copies; every path must resolve (repo-dependent, checked by the Python validator)."
+        },
+        "connection": { "$ref": "#/$defs/connection" },
+        "credential_refs": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$(?![\\s\\S])" },
+          "description": "Environment-variable names the service needs beyond any auth credential_ref — names only, never values."
+        },
+        "verification": { "$ref": "#/$defs/verification" }
+      },
+      "required": [
+        "id", "purpose", "required", "workflows", "guidance", "verification"
+      ],
+      "additionalProperties": false
+    },
+    "connection": {
+      "description": "Exactly one branch applies: remote (https endpoint or machine-local reference, plus optional auth) or stdio (a command reference). Fields are constrained per branch; additionalProperties is false within each.",
+      "oneOf": [
+        {
+          "type": "object",
+          "description": "remote: exactly one of url or local_config_ref, plus optional auth. command_ref does not apply.",
+          "properties": {
+            "type": { "const": "remote" },
+            "url": { "$ref": "#/$defs/url" },
+            "local_config_ref": { "$ref": "#/$defs/localConfigRef" },
+            "auth": { "$ref": "#/$defs/auth" }
+          },
+          "required": ["type"],
+          "additionalProperties": false,
+          "oneOf": [
+            { "required": ["url"] },
+            { "required": ["local_config_ref"] }
+          ]
+        },
+        {
+          "type": "object",
+          "description": "stdio: command_ref (required) plus optional local_config_ref; url and auth do not apply.",
+          "properties": {
+            "type": { "const": "stdio" },
+            "command_ref": { "$ref": "#/$defs/commandRef" },
+            "local_config_ref": { "$ref": "#/$defs/localConfigRef" }
+          },
+          "required": ["type", "command_ref"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "url": {
+      "type": "string",
+      "pattern": "^https://[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?)*(?::[0-9]*)?(/[^#?]*)?$(?![\\s\\S])",
+      "description": "Portable https endpoint: dot-separated ASCII hostname (letters, digits, hyphens, underscores) with an optional numeric port and optional path — no userinfo, query string or fragment. Bracketed, internationalized or parameterized endpoints belong to the machine-local details a local_config_ref points at; this mirrors the exact grammar scripts/mcp_requirements.ts enforces."
+    },
+    "localConfigRef": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?![~/])(?![\\s\\S]*[\\x00-\\x1f\\\\])(?![\\s\\S]*[A-Za-z]:[/\\\\])[\\s\\S]+(?![\\s\\S])",
+      "description": "Free-form pointer to separately configured machine-local connection details — descriptive and machine-independent, never an absolute or machine-specific path; not validated as a repo path."
+    },
+    "commandRef": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_.-]*$(?![\\s\\S])",
+      "description": "Name of an environment variable or machine-local setting holding the executable command — never the command, its path or a command line."
+    },
+    "auth": {
+      "oneOf": [
+        {
+          "type": "object",
+          "description": "Interactive OAuth flow; credential_ref does not apply.",
+          "properties": {
+            "mechanism": { "const": "oauth" }
+          },
+          "required": ["mechanism"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "description": "Static credential: the environment-variable NAME holding it — the value stays outside the manifest.",
+          "properties": {
+            "mechanism": { "const": "api-key" },
+            "credential_ref": {
+              "type": "string",
+              "pattern": "^[A-Z][A-Z0-9_]*$(?![\\s\\S])"
+            }
+          },
+          "required": ["mechanism", "credential_ref"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "verification": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "[^\\t-\\r\\x1c-\\x1f \\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]",
+          "description": "The bounded read-only check that would verify access."
+        },
+        "read_only": {
+          "const": true,
+          "description": "Must be literally true; verification never writes."
+        }
+      },
+      "required": ["description", "read_only"],
+      "additionalProperties": false
+    }
+  }
+}

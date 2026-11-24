@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "services": [
+    {
+      "id": "issue-tracker",
+      "purpose": "Read and update the project's issue tracker during issue workflows.",
+      "required": true,
+      "workflows": ["shape-issue", "deliver-issue", "review-issue"],
+      "guidance": [
+        "docs/mcp-requirements.md",
+        "docs/integrations.md"
+      ],
+      "connection": {
+        "type": "remote",
+        "url": "https://tracker.example.test/mcp",
+        "auth": {
+          "mechanism": "api-key",
+          "credential_ref": "TRACKER_API_TOKEN"
+        }
+      },
+      "verification": {
+        "description": "Fetch one open issue by number through the read API; no writes.",
+        "read_only": true
+      }
+    },
+    {
+      "id": "design-library",
+      "purpose": "Read shared design assets that require an interactive account sign-in.",
+      "required": false,
+      "workflows": ["implement-issue"],
+      "guidance": [
+        "docs/mcp-requirements.md"
+      ],
+      "connection": {
+        "type": "remote",
+        "url": "https://design.example.test/mcp",
+        "auth": {
+          "mechanism": "oauth"
+        }
+      },
+      "verification": {
+        "description": "List the account's readable collections after the interactive flow; no writes.",
+        "read_only": true
+      }
+    }
+  ]
+}

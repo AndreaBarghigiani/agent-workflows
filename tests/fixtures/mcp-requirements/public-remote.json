@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "services": [
+    {
+      "id": "shared-docs",
+      "purpose": "Public documentation search covering the project's upstream specifications.",
+      "required": false,
+      "workflows": ["*"],
+      "guidance": [
+        "docs/mcp-requirements.md",
+        "docs/integrations.md"
+      ],
+      "connection": {
+        "type": "remote",
+        "url": "https://docs.example.test/mcp"
+      },
+      "verification": {
+        "description": "Search the public docs index for one known term and list the returned titles; no writes.",
+        "read_only": true
+      }
+    }
+  ]
+}

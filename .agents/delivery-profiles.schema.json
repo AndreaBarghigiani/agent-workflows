@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Delivery profiles",
+  "description": "Consumer-owned .agents/delivery-profiles.json: every top-level property name is a delivery profile key; an empty object is valid.",
+  "type": "object",
+  "additionalProperties": { "$ref": "#/$defs/profile" },
+  "$defs": {
+    "profile": {
+      "type": "object",
+      "properties": {
+        "implement": { "$ref": "#/$defs/role" },
+        "review": { "$ref": "#/$defs/role" },
+        "orchestrator": { "$ref": "#/$defs/role" }
+      },
+      "additionalProperties": false
+    },
+    "role": {
+      "type": "object",
+      "properties": {
+        "provider": { "type": "string", "minLength": 1 },
+        "model": { "type": "string", "minLength": 1 },
+        "reasoning": { "type": "string" }
+      },
+      "required": ["provider", "model"],
+      "additionalProperties": false
+    }
+  }
+}

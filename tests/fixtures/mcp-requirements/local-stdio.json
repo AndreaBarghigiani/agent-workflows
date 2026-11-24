@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "services": [
+    {
+      "id": "local-lint",
+      "purpose": "Project lint and format checks exposed by a locally launched stdio server.",
+      "required": true,
+      "workflows": ["implement-issue"],
+      "guidance": [
+        "docs/mcp-requirements.md"
+      ],
+      "connection": {
+        "type": "stdio",
+        "command_ref": "LINT_MCP_COMMAND",
+        "local_config_ref": "consumer toolchain notes for the lint server"
+      },
+      "credential_refs": ["LINT_BACKEND_TOKEN"],
+      "verification": {
+        "description": "List the server's lint tools and run one read-only check on a committed file.",
+        "read_only": true
+      }
+    }
+  ]
+}

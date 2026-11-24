@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__unrelated",
+      "Bash(git status)"
+    ],
+    "deny": [
+      "WebFetch(domain:example.test)"
+    ]
+  },
+  "enabledMcpjsonServers": ["mem"],
+  "disabledMcpjsonServers": ["blocked"],
+  "statusLine": {
+    "type": "command",
+    "command": "fixture-status"
+  }
+}

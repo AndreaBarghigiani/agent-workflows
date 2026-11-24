@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "skills": {
+    "palette": {
+      "hash": "sha256:4f2368b8cb8ebfee0eb7312f553b1477f08b003ba60e2895571774cfd85d8dce",
+      "adopted": "2026-11-18",
+      "paths": [
+        ".claude/skills/palette",
+        ".codex/skills/palette"
+      ],
+      "source": "vendortool",
+      "version": "\"1.0\""
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "services": [
+    {
+      "id": "basic-memory",
+      "purpose": "Persistent project notes shared across sessions, machines and clients.",
+      "required": true,
+      "workflows": ["*"],
+      "guidance": [
+        ".agents/skills/setup-basic-memory/references/client-connection.md",
+        "docs/memory/connections.md"
+      ],
+      "connection": {
+        "type": "remote",
+        "local_config_ref": "machine-local profile $XDG_CONFIG_HOME/agent-workflows/memory-connection.toml (endpoint and bearer-token env-var name)"
+      },
+      "verification": {
+        "description": "A native read-only query against the configured memory project, per the client-connection reference; no writes.",
+        "read_only": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+
+# macOS Finder and AppleDouble metadata, including files copied over Samba.
+.DS_Store
+._*
+
+# Consumer memory contract: local settings and replay evidence are never versioned.
+/.agents/memory.local.toml
+/.agents/memory-pending/
+
+# Test fixtures intentionally exercise client settings files that local git
+# excludes may hide (e.g. **/.claude/settings.local.json); always track them.
+!/tests/fixtures/**/.claude/settings.local.json

@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__basic_memory_nas",
+      "mcp__tracker__read_issue",
+      "mcp__tracker__list_issues",
+      "Bash(git status)"
+    ]
+  },
+  "enabledMcpjsonServers": ["basic_memory_nas"],
+  "disabledMcpjsonServers": ["lint"]
+}

@@ -1,0 +1,129 @@
+{
+  "version": 1,
+  "services": [
+    {
+      "id": "memory",
+      "purpose": "Persistent project notes; already registered under a different name.",
+      "required": true,
+      "workflows": ["*"],
+      "guidance": ["docs/guide.md"],
+      "connection": {
+        "type": "remote",
+        "local_config_ref": "machine-local memory profile"
+      },
+      "verification": {
+        "description": "A native read-only query against the configured memory project; no writes.",
+        "read_only": true
+      }
+    },
+    {
+      "id": "tracker",
+      "purpose": "Issue tracker access, registered nowhere yet.",
+      "required": true,
+      "workflows": ["*"],
+      "guidance": ["docs/guide.md"],
+      "connection": {
+        "type": "remote",
+        "url": "https://tracker.example.test/mcp",
+        "auth": {
+          "mechanism": "api-key",
+          "credential_ref": "TRACKER_API_TOKEN"
+        }
+      },
+      "verification": {
+        "description": "Fetch one open issue by number through the read API; no writes.",
+        "read_only": true
+      }
+    },
+    {
+      "id": "lint",
+      "purpose": "Project lint checks exposed by a locally launched stdio server.",
+      "required": false,
+      "workflows": ["implement-issue"],
+      "guidance": ["docs/guide.md"],
+      "connection": {
+        "type": "stdio",
+        "command_ref": "LINT_MCP_COMMAND"
+      },
+      "credential_refs": ["LINT_BACKEND_TOKEN"],
+      "verification": {
+        "description": "List the server's lint tools and run one read-only check.",
+        "read_only": true
+      }
+    },
+    {
+      "id": "blocked",
+      "purpose": "A service whose registrations exist but are explicitly disabled.",
+      "required": false,
+      "workflows": ["*"],
+      "guidance": ["docs/guide.md"],
+      "connection": {
+        "type": "remote",
+        "url": "https://blocked.example.test/mcp"
+      },
+      "verification": {
+        "description": "One read-only probe against the blocked endpoint.",
+        "read_only": true
+      }
+    },
+    {
+      "id": "moved",
+      "purpose": "A service whose same-name registrations point at a stale endpoint.",
+      "required": false,
+      "workflows": ["*"],
+      "guidance": ["docs/guide.md"],
+      "connection": {
+        "type": "remote",
+        "url": "https://moved.example.test/mcp"
+      },
+      "verification": {
+        "description": "One read-only probe against the moved endpoint.",
+        "read_only": true
+      }
+    },
+    {
+      "id": "partner-api",
+      "purpose": "A service with no declared connection; the owner selects an existing registration as its source.",
+      "required": false,
+      "workflows": ["*"],
+      "guidance": ["docs/guide.md"],
+      "verification": {
+        "description": "Verify the service once a connection exists.",
+        "read_only": true
+      }
+    },
+    {
+      "id": "shadowed",
+      "purpose": "A service whose OpenCode registration is duplicated across layers.",
+      "required": false,
+      "workflows": ["*"],
+      "guidance": ["docs/guide.md"],
+      "connection": {
+        "type": "remote",
+        "url": "https://shadow.example.test/mcp"
+      },
+      "verification": {
+        "description": "One read-only probe against the shadowed endpoint.",
+        "read_only": true
+      }
+    },
+    {
+      "id": "oauth-docs",
+      "purpose": "Documentation search behind an interactive OAuth flow.",
+      "required": false,
+      "workflows": ["*"],
+      "guidance": ["docs/guide.md"],
+      "connection": {
+        "type": "remote",
+        "url": "https://oauth.example.test/mcp",
+        "auth": {
+          "mechanism": "oauth"
+        }
+      },
+      "verification": {
+        "description": "One read-only search against the docs endpoint.",
+        "read_only": true
+      }
+    }
+  ]
+}

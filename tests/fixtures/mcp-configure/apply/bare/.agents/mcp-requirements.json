@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "services": [
+    {
+      "id": "tracker",
+      "purpose": "Issue tracker access in a checkout with no client files yet.",
+      "required": true,
+      "workflows": ["*"],
+      "guidance": ["docs/guide.md"],
+      "connection": {
+        "type": "remote",
+        "url": "https://tracker.example.test/mcp",
+        "auth": {
+          "mechanism": "api-key",
+          "credential_ref": "TRACKER_API_TOKEN"
+        }
+      },
+      "verification": {
+        "description": "Fetch one open issue by number through the read API; no writes.",
+        "read_only": true
+      }
+    },
+    {
+      "id": "lint",
+      "purpose": "Project lint checks exposed by a locally launched stdio server.",
+      "required": false,
+      "workflows": ["implement-issue"],
+      "guidance": ["docs/guide.md"],
+      "connection": {
+        "type": "stdio",
+        "command_ref": "LINT_MCP_COMMAND"
+      },
+      "credential_refs": ["LINT_BACKEND_TOKEN"],
+      "verification": {
+        "description": "List the server's lint tools and run one read-only check.",
+        "read_only": true
+      }
+    }
+  ]
+}

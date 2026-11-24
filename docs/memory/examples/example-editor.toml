@@ -1,0 +1,13 @@
+# Consumer routing input: setup writes .agents/memory/config.toml
+schema_version = 2
+
+[project]
+id = "example-editor"
+
+[memory]
+write_project = "example-editor"
+search_projects = ["example-editor", "shared-engineering"]
+related_projects = ["example-app", "example-api"]
+mcp_server = "basic_memory"
+# Each client must connect this server name to the same Basic Memory service.
+# No filesystem mount. Choose each client's locally configured server name.

@@ -1,0 +1,47 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "memory": {
+      "type": "remote",
+      "url": "https://memory.example.test/mcp",
+      "enabled": true
+    },
+    "tracker": {
+      "type": "remote",
+      "url": "https://tracker.example.test/mcp",
+      "enabled": true,
+      "headers": {
+        "Authorization": "Bearer {env:TRACKER_API_TOKEN}"
+      }
+    },
+    "lint": {
+      "type": "local",
+      "command": ["lint-mcp", "--stdio"],
+      "enabled": true,
+      "environment": {
+        "LINT_BACKEND_TOKEN": "SECRET_SENTINEL-do-not-emit"
+      }
+    },
+    "mystery": {
+      "type": "warp-drive",
+      "url": "https://docs.example.test/mcp"
+    },
+    "shadow": {
+      "type": "remote",
+      "url": "https://shadow-alt.example.test/mcp"
+    },
+    "servers": {
+      "shadow": {
+        "type": "remote",
+        "url": "https://shadow.example.test/mcp"
+      }
+    },
+    "unrelated": {
+      "type": "local",
+      "command": ["secret-runner"],
+      "environment": {
+        "API_KEY": "SECRET_SENTINEL-do-not-emit"
+      }
+    }
+  }
+}

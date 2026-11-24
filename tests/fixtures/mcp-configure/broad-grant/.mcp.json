@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "anything": {
+      "type": "http",
+      "url": "https://anything.example.test/mcp"
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "mcpServers": {
+    "basic_memory_nas": {
+      "type": "http",
+      "url": "https://memory.example.test/mcp"
+    },
+    "tracker": {
+      "type": "http",
+      "url": "https://tracker.example.test/mcp",
+      "headers": {
+        "Authorization": "Bearer ${TRACKER_API_TOKEN}"
+      }
+    },
+    "lint": {
+      "command": "lint-mcp",
+      "args": ["--stdio"],
+      "env": {
+        "LINT_BACKEND_TOKEN": "SECRET_SENTINEL-do-not-emit"
+      }
+    },
+    "weird": {
+      "transport": "carrier-pigeon"
+    },
+    "unrelated": {
+      "command": "secret-runner",
+      "args": ["--api-key", "SECRET_SENTINEL-do-not-emit"],
+      "env": {
+        "API_KEY": "SECRET_SENTINEL-do-not-emit"
+      }
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "agent-workflows",
+  "private": true,
+  "type": "module",
+  "description": "Pinned workflow skills and TypeScript tooling for consumer projects.",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "ajv": "^8.20.0",
+    "typescript": "^7.0.2",
+    "yaml": "^2.9.1"
+  }
+}

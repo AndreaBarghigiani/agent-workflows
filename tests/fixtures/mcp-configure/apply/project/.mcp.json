@@ -1,0 +1,31 @@
+{
+  "mcpServers": {
+    "mem": {
+      "type": "http",
+      "url": "https://memory.example.test/mcp"
+    },
+    "blocked": {
+      "type": "http",
+      "url": "https://blocked.example.test/mcp"
+    },
+    "moved": {
+      "type": "http",
+      "url": "https://elsewhere.example.test/mcp"
+    },
+    "partner": {
+      "type": "http",
+      "url": "https://partner.example.test/mcp",
+      "headers": {
+        "Authorization": "Bearer ${PARTNER_TOKEN}",
+        "X-Partner-Key": "SECRET_SENTINEL-do-not-emit"
+      }
+    },
+    "unrelated": {
+      "command": "secret-runner",
+      "args": ["--api-key", "SECRET_SENTINEL-do-not-emit"],
+      "env": {
+        "API_KEY": "SECRET_SENTINEL-do-not-emit"
+      }
+    }
+  }
+}

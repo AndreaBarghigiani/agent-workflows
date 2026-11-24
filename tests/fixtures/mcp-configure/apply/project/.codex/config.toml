@@ -1,0 +1,23 @@
+# Codex project configuration fixture.
+# Comments and unrelated tables must survive targeted edits verbatim.
+model = "gpt-5"
+
+# Existing memory registration under a different name (trailing slash).
+[mcp_servers.mem]
+url = "https://memory.example.test/mcp/"
+
+# A same-name entry pointing at a stale endpoint.
+[mcp_servers.moved]
+url = "https://elsewhere.example.test/mcp"
+
+# A disabled registration that would satisfy the blocked service.
+[mcp_servers.blocked]
+url = "https://blocked.example.test/mcp"
+enabled = false
+
+# Unrelated entries must stay verbatim, secret values included.
+[mcp_servers.unrelated]
+command = "secret-runner"
+
+[mcp_servers.unrelated.env]
+API_KEY = "SECRET_SENTINEL-do-not-emit"

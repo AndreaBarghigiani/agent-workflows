@@ -1,0 +1,46 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "mem": {
+      "type": "remote",
+      "url": "https://memory.example.test/mcp",
+      "enabled": true
+    },
+    "blocked": {
+      "type": "remote",
+      "url": "https://blocked.example.test/mcp",
+      "enabled": false
+    },
+    "moved": {
+      "type": "remote",
+      "url": "https://elsewhere.example.test/mcp"
+    },
+    "partner": {
+      "type": "remote",
+      "url": "https://partner.example.test/mcp",
+      "timeout": 45,
+      "headers": {
+        "Authorization": "Bearer {env:PARTNER_TOKEN}",
+        "X-Partner-Key": "SECRET_SENTINEL-do-not-emit"
+      }
+    },
+    "shadowed": {
+      "type": "remote",
+      "url": "https://legacy-shadow.example.test/mcp"
+    },
+    "servers": {
+      "shadowed": {
+        "type": "remote",
+        "url": "https://shadow.example.test/mcp"
+      },
+      "unrelated": {
+        "type": "local",
+        "command": ["secret-runner"],
+        "environment": {
+          "API_KEY": "SECRET_SENTINEL-do-not-emit"
+        }
+      }
+    }
+  },
+  "theme": "fixture"
+}
