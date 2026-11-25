@@ -1958,6 +1958,98 @@ describe('FollowUpTests', () => {
     );
   });
 
+  test('test_t3_retired_id_action_triggers_the_cutover', () => {
+    // TypeScript pins on both sides and the managed action already on
+    // the `.mjs` launcher: only the retired identifier needs the
+    // `--configure-action` rewrite.
+    writeT3Config({ routing_source: null });
+    writeText(
+      join(ctx.project, 't3.json'),
+      JSON.stringify({
+        scripts: [
+          {
+            id: 'agent-workflows-checkout-readiness',
+            name: 'Agent workflows checkout readiness',
+            command: 'node .agent-workflows-t3.mjs',
+            icon: 'configure',
+            runOnWorktreeCreate: true,
+            runOnSettle: false,
+            async: false,
+          },
+        ],
+      }) + '\n',
+    );
+    const document = plan();
+    assert.equal(document.status, 'ready');
+    const cutover = document.follow_ups.find((entry) =>
+      entry.commands.some((command) =>
+        command.includes('--configure-action'),
+      ),
+    );
+    assert.ok(cutover, 'expected a T3 cutover follow-up');
+    assert.deepEqual(
+      cutover.commands.map((command) => command.split(' ').pop()),
+      ['--check', '--configure-action', '--check'],
+    );
+    assert.equal(cutover.when, 'after the owner commits the pin');
+    assert.ok(
+      cutover.reason.includes('agent-workflows-checkout-readiness'),
+      cutover.reason,
+    );
+    assert.ok(
+      cutover.reason.includes('agent-workflows-ready'),
+      cutover.reason,
+    );
+    assert.ok(
+      document.notes.some((note) => note.includes('already registered')),
+      document.notes.join('\n'),
+    );
+    assert.ok(
+      document.notes.some((note) =>
+        note.includes('no registered action shares its name or command'),
+      ),
+      document.notes.join('\n'),
+    );
+    assert.ok(
+      !document.notes.some((note) =>
+        note.includes('.agent-workflows-t3.py'),
+      ),
+      document.notes.join('\n'),
+    );
+  });
+
+  test('test_t3_retired_id_composed_action_triggers_the_cutover', () => {
+    writeT3Config({ routing_source: null });
+    writeText(
+      join(ctx.project, 't3.json'),
+      JSON.stringify({
+        scripts: [
+          {
+            id: 'agent-workflows-checkout-readiness',
+            name: 'Agent workflows checkout readiness',
+            command:
+              'node .agent-workflows-t3.mjs &&' +
+              ' node .agent-workflows/bin/agent-workflows.ts' +
+              ' setup_memory_connections --project .',
+            icon: 'configure',
+            runOnWorktreeCreate: true,
+            runOnSettle: false,
+            async: false,
+          },
+        ],
+      }) + '\n',
+    );
+    const document = plan();
+    assert.equal(document.status, 'ready');
+    assert.ok(
+      document.follow_ups.some((entry) =>
+        entry.commands.some((command) =>
+          command.includes('--configure-action'),
+        ),
+      ),
+    );
+  });
+
   test('test_t3_python_command_outside_the_managed_action_is_a_note', () => {
     writeT3Config({ routing_source: null });
     // Same launcher command but not the exact managed action: the

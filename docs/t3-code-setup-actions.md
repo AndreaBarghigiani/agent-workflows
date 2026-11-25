@@ -90,6 +90,34 @@ Tagged sources:
 - [ProjectScriptsControl.tsx](https://github.com/pingdotgg/t3code/blob/v0.1.1/apps/web/src/components/ProjectScriptsControl.tsx)
 - [t3ProjectFile.ts](https://github.com/pingdotgg/t3code/blob/v0.1.1/packages/contracts/src/t3ProjectFile.ts)
 
+## What v0.1.12 source establishes (checked 2026-11-25)
+
+### Script identifiers take two routes
+
+The server enforces the script-ID rule on project updates. For a new script id
+forwarded to `planProjectCommand`, the run command `script.<id>.run` must match
+`SCRIPT_RUN_COMMAND_PATTERN`: a literal `script.` prefix, a non-empty id of at
+most `MAX_SCRIPT_ID_LENGTH` (24) characters matching
+`/^[a-z0-9][a-z0-9-]*$/`, then `.run`. The rejection reads "Script IDs must be
+1-24 lowercase letters, digits or hyphens, starting with a letter or digit (got
+N characters)". A `t3.json` entry whose id reaches that update — for example
+through `t3_project_update` — is refused when the id exceeds the limit.
+
+The GUI import route differs. The `t3.json` contract (`T3ProjectFileScript`)
+carries no `id` field, and **Import from t3.json** ignores an entry's `id`
+entirely: it derives the action ID from the action name, truncated to 24
+characters — `Agent workflows checkout readiness` becomes
+`agent-workflows-checkout`. An effective action's ID can therefore differ from
+the `id` recorded in `t3.json`.
+
+Tagged sources:
+
+- [ProjectCommands.ts](https://github.com/pingdotgg/t3code/blob/v0.1.12/apps/server/src/orchestration-v2/ProjectCommands.ts)
+- [keybindings.ts](https://github.com/pingdotgg/t3code/blob/v0.1.12/packages/contracts/src/keybindings.ts)
+- [t3ProjectFile.ts](https://github.com/pingdotgg/t3code/blob/v0.1.12/packages/contracts/src/t3ProjectFile.ts)
+- [ProjectScriptsControl.tsx](https://github.com/pingdotgg/t3code/blob/v0.1.12/apps/web/src/components/ProjectScriptsControl.tsx)
+- [projectScripts.ts](https://github.com/pingdotgg/t3code/blob/v0.1.12/apps/web/src/projectScripts.ts)
+
 ## Successor installation handoff
 
 For this private library, a successor installer can generate a repository-root

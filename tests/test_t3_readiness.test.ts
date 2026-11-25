@@ -1501,3 +1501,240 @@ test('test_check_routing_source_reports_python_only_memory_connections', async (
   assert.doesNotMatch(result.stderr, /ERR_MODULE_NOT_FOUND|at |Error:/);
 });
 
+// --- Retired action identifier migration (issue #1; no Python counterpart) ---
+
+const RETIRED_ID = 'agent-workflows-checkout-readiness';
+
+/**
+ * The generated action's identifier is the exported constant and
+ * satisfies T3's 24-character script-ID rule.
+ */
+test('test_action_id_satisfies_t3_script_id_rule', () => {
+  const generated = readiness.action();
+  assert.equal(dictGet(generated, 'id'), readiness.ACTION_ID);
+  assert.equal(readiness.valid_action_id(dictGet(generated, 'id')), true);
+});
+
+/** Boundary outcomes of T3's script-ID rule, pinned character for character. */
+test('test_valid_action_id_boundaries', () => {
+  for (const value of ['a', '0', 'a-b', 'a--b', 'ab-', 'a'.repeat(24)]) {
+    assert.equal(
+      readiness.valid_action_id(value),
+      true,
+      `expected valid: ${value}`,
+    );
+  }
+  for (const value of [
+    '',
+    'a'.repeat(25),
+    'A',
+    'a_b',
+    '-a',
+    'a b',
+    'a.b',
+    null,
+    7,
+  ]) {
+    assert.equal(
+      readiness.valid_action_id(value),
+      false,
+      `expected invalid: ${String(value)}`,
+    );
+  }
+});
+
+/** The generation-time assertion names the offending value. */
+test('test_assert_valid_action_id', () => {
+  readiness.assert_valid_action_id(readiness.ACTION_ID);
+  let thrown: unknown;
+  try {
+    readiness.assert_valid_action_id(RETIRED_ID);
+  } catch (error) {
+    thrown = error;
+  }
+  assertValueError(thrown);
+  assert.match(
+    (thrown as Error).message,
+    /Script IDs must be 1-24 lowercase letters/,
+  );
+  assert.match((thrown as Error).message, /agent-workflows-checkout-readiness/);
+  assert.match((thrown as Error).message, /34 characters/);
+  thrown = undefined;
+  try {
+    readiness.assert_valid_action_id(null);
+  } catch (error) {
+    thrown = error;
+  }
+  assertValueError(thrown);
+});
+
+/**
+ * A t3.json carrying the retired identifier: `--check` reports the
+ * generated-asset diagnostic, `--configure-action` rewrites only the
+ * `id` in place, a rerun leaves the bytes unchanged and `--check`
+ * then passes.
+ */
+test('test_retired_id_plain_action_is_migrated_in_place', async (t) => {
+  const f = await makeFixture();
+  t.after(() => rmSync(f.tmp, { recursive: true, force: true }));
+  const path = join(f.root, 't3.json');
+  const data = JSON.parse(readFileSync(path, 'utf8')) as {
+    scripts: Record<string, unknown>[];
+  } & Record<string, unknown>;
+  data.scripts[0].id = RETIRED_ID;
+  const original = { ...data.scripts[0] };
+  data.unrelated = { keep: true };
+  data.scripts.push({ id: 'manual', name: 'Manual', command: 'true' });
+  writeText(path, JSON.stringify(data, null, 2) + '\n');
+  await rejectsRegex(
+    () => readiness.check_action(f.root),
+    /Generated asset missing: t3\.json; run --configure-action/,
+  );
+  await readiness.configure(f.root);
+  const migrated = JSON.parse(readFileSync(path, 'utf8')) as {
+    scripts: Record<string, unknown>[];
+    unrelated: { keep: boolean };
+  };
+  assert.equal(migrated.scripts[0].id, readiness.ACTION_ID);
+  assert.equal(
+    migrated.scripts[0].command,
+    'node .agent-workflows-t3.mjs',
+  );
+  assert.equal(migrated.unrelated.keep, true);
+  assert.equal(migrated.scripts.length, 2);
+  assert.equal(migrated.scripts[1].id, 'manual');
+  // Only the id changed: every other field survives the rewrite.
+  assert.deepEqual(migrated.scripts[0], {
+    ...original,
+    id: readiness.ACTION_ID,
+  });
+  const before = readFileSync(path);
+  await readiness.configure(f.root);
+  assert.deepEqual(readFileSync(path), before);
+  await readiness.check_action(f.root);
+});
+
+/**
+ * A retired identifier on the valid composed form: the command's bytes
+ * are preserved exactly and only the `id` is rewritten.
+ */
+test('test_retired_id_composed_action_rewrites_only_the_id', async (t) => {
+  const f = await makeFixture();
+  t.after(() => rmSync(f.tmp, { recursive: true, force: true }));
+  const path = join(f.root, 't3.json');
+  const data = JSON.parse(readFileSync(path, 'utf8')) as {
+    scripts: { id: string; command: string }[];
+  };
+  data.scripts[0].id = RETIRED_ID;
+  data.scripts[0].command +=
+    ' && node .agent-workflows/bin/agent-workflows.ts' +
+    ' setup_memory_connections --project .';
+  const original = { ...data.scripts[0] };
+  writeText(path, JSON.stringify(data, null, 2) + '\n');
+  await readiness.configure(f.root);
+  const migrated = JSON.parse(readFileSync(path, 'utf8')) as {
+    scripts: { id: string; command: string }[];
+  };
+  assert.equal(migrated.scripts[0].id, readiness.ACTION_ID);
+  assert.equal(migrated.scripts[0].command, original.command);
+  // Only the id changed: the composed command and every other field
+  // survive byte-for-byte.
+  assert.deepEqual(migrated.scripts[0], {
+    ...original,
+    id: readiness.ACTION_ID,
+  });
+  await readiness.check_action(f.root);
+});
+
+/**
+ * A retired identifier on a Python-era action: one `--configure-action`
+ * pass rewrites both the launcher command and the `id`.
+ */
+test('test_retired_id_python_era_action_migrates_command_and_id', async (t) => {
+  const f = await makeFixture();
+  t.after(() => rmSync(f.tmp, { recursive: true, force: true }));
+  const path = join(f.root, 't3.json');
+  const data = JSON.parse(readFileSync(path, 'utf8')) as {
+    scripts: { id: string; command: string }[];
+  };
+  data.scripts[0].id = RETIRED_ID;
+  data.scripts[0].command = `python3 ${BOOTSTRAP_PY}`;
+  writeText(path, JSON.stringify(data, null, 2) + '\n');
+  await readiness.configure(f.root);
+  const migrated = JSON.parse(readFileSync(path, 'utf8')) as {
+    scripts: { id: string; command: string }[];
+  };
+  assert.equal(migrated.scripts[0].id, readiness.ACTION_ID);
+  assert.equal(
+    migrated.scripts[0].command,
+    'node .agent-workflows-t3.mjs',
+  );
+  await readiness.check_action(f.root);
+});
+
+/** A retired identifier does not unlock customized managed entries. */
+test('test_retired_id_customized_action_is_refused', async (t) => {
+  const f = await makeFixture();
+  t.after(() => rmSync(f.tmp, { recursive: true, force: true }));
+  const path = join(f.root, 't3.json');
+  const customized = dictSpread(
+    dictSpread(readiness.action(), 'id', RETIRED_ID),
+    'runOnWorktreeCreate',
+    false,
+  );
+  writeText(
+    path,
+    jsonDumpsDefault(new Map<string, unknown>([['scripts', [customized]]])),
+  );
+  const before = readFileSync(path);
+  await rejectsRegex(() => readiness.configure(f.root), /conflicts/);
+  assert.deepEqual(readFileSync(path), before);
+});
+
+/** Retired and current identifiers on two entries stay a conflict. */
+test('test_retired_and_current_id_entries_conflict', async (t) => {
+  const f = await makeFixture();
+  t.after(() => rmSync(f.tmp, { recursive: true, force: true }));
+  const path = join(f.root, 't3.json');
+  const retired = dictSpread(readiness.action(), 'id', RETIRED_ID);
+  writeText(
+    path,
+    jsonDumpsDefault(
+      new Map<string, unknown>([
+        ['scripts', [retired, readiness.action()]],
+      ]),
+    ),
+  );
+  const before = readFileSync(path);
+  await rejectsRegex(() => readiness.configure(f.root), /conflicts/);
+  assert.deepEqual(readFileSync(path), before);
+});
+
+/** `python_era_action`/`legacy_id_action` classification outcomes. */
+test('test_managed_action_classification', () => {
+  const expected = readiness.action();
+  const retired = dictSpread(expected, 'id', RETIRED_ID);
+  const pythonEra = dictSpread(retired, 'command', `python3 ${BOOTSTRAP_PY}`);
+  const composed = dictSpread(
+    retired,
+    'command',
+    'node .agent-workflows-t3.mjs &&' +
+      ' node .agent-workflows/bin/agent-workflows.ts' +
+      ' setup_memory_connections --project .',
+  );
+  const unrelated = new Map<string, unknown>([
+    ['id', 'custom-readiness'],
+    ['name', 'Custom readiness'],
+    ['command', `python3 ${BOOTSTRAP_PY}`],
+  ]);
+  assert.equal(readiness.python_era_action(pythonEra), true);
+  assert.equal(readiness.legacy_id_action(pythonEra), false);
+  assert.equal(readiness.python_era_action(retired), false);
+  assert.equal(readiness.legacy_id_action(retired), true);
+  assert.equal(readiness.legacy_id_action(composed), true);
+  assert.equal(readiness.python_era_action(expected), false);
+  assert.equal(readiness.legacy_id_action(expected), false);
+  assert.equal(readiness.python_era_action(unrelated), false);
+  assert.equal(readiness.legacy_id_action(unrelated), false);
+});
+
