@@ -2001,7 +2001,13 @@ describe('FollowUpTests', () => {
       cutover.reason,
     );
     assert.ok(
-      document.notes.some((note) => note.includes('re-import')),
+      document.notes.some((note) => note.includes('already registered')),
+      document.notes.join('\n'),
+    );
+    assert.ok(
+      document.notes.some((note) =>
+        note.includes('no registered action shares its name or command'),
+      ),
       document.notes.join('\n'),
     );
     assert.ok(

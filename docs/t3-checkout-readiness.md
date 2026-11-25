@@ -209,10 +209,12 @@ files carried the retired 34-character `agent-workflows-checkout-readiness` id,
 which T3 rejects on project updates. When a pin bump changes the identifier, run
 `--configure-action` to rewrite the `id` in place — a composed command and
 unrelated entries are preserved — commit the regenerated `t3.json`, then
-re-import the action as above. Separately, T3 assigns GUI-imported and
-hand-created actions their own ID derived from the action name, so the
-effective action's ID can differ from the `id` in `t3.json`; that is expected,
-not drift.
+import the action as above unless the project already registered it: T3
+offers a `t3.json` entry only when no registered action shares its name or
+command, and a registered action keeps working with the new pin. T3 assigns
+GUI-imported and hand-created actions their own ID derived from the action
+name, so the effective action's ID can differ from the `id` in `t3.json`;
+that is expected, not drift.
 
 Before claiming delivery, verify these separate milestones on an authorized
 disposable/pilot project:

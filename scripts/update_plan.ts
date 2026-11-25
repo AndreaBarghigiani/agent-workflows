@@ -1967,9 +1967,12 @@ function phaseT3(state: PlanState): void {
     }
     if (legacyIdAction) {
       state.notes.push(
-        're-import the action in T3 project settings (Actions ->' +
-          ' Import scripts -> Import from t3.json) after the pin bump' +
-          ' and regeneration',
+        'import the action in T3 project settings (Actions -> Import' +
+          ' scripts -> Import from t3.json) after the pin bump and' +
+          ' regeneration unless the project already registered it: T3' +
+          ' offers a t3.json entry only when no registered action shares' +
+          ' its name or command, and a registered action keeps working' +
+          ' with the new pin',
       );
       state.notes.push(
         'T3 assigns GUI-imported and hand-created actions an ID derived' +
