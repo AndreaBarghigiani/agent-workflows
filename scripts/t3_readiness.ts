@@ -46,7 +46,50 @@ import { pyResolve } from './install.ts';
 export const CONFIG = '.agent-workflows-t3.json';
 export const BOOTSTRAP = '.agent-workflows-t3.py';
 export const BOOTSTRAP_MJS = '.agent-workflows-t3.mjs';
-export const ACTION_ID = 'agent-workflows-checkout-readiness';
+// The managed action's identifier must fit T3's 24-character script-ID
+// limit (issue #1); the retired 34-character id is still recognized as
+// the same managed action and rewritten in place.
+export const ACTION_ID = 'agent-workflows-ready';
+export const LEGACY_ACTION_IDS: readonly string[] = [
+  'agent-workflows-checkout-readiness',
+];
+
+/**
+ * T3's script-ID rule for managed-action identifiers: 1-24 lowercase
+ * letters, digits or hyphens, starting with a letter or digit.
+ *
+ * The rule is server-side: `planProjectCommand` applies it to every new
+ * script id forwarded through a project update, while the `t3.json`
+ * file contract carries no `id` field and the GUI import derives the
+ * action ID from the name instead — so only the managed id is checked
+ * here, never unrelated entries'. Sources:
+ * packages/contracts/src/keybindings.ts (MAX_SCRIPT_ID_LENGTH,
+ * SCRIPT_RUN_COMMAND_PATTERN) and
+ * apps/server/src/orchestration-v2/ProjectCommands.ts at tag v0.1.12.
+ */
+export const ACTION_ID_MAX_LENGTH = 24;
+const ACTION_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+
+export function valid_action_id(value: unknown): boolean {
+  return (
+    typeof value === 'string' &&
+    value.length >= 1 &&
+    value.length <= ACTION_ID_MAX_LENGTH &&
+    ACTION_ID_PATTERN.test(value)
+  );
+}
+
+export function assert_valid_action_id(value: unknown): void {
+  if (valid_action_id(value)) return;
+  throw new ValueError(
+    'Script IDs must be 1-24 lowercase letters, digits or hyphens, ' +
+      `starting with a letter or digit: ${pyRepr(value)}` +
+      (typeof value === 'string'
+        ? ` (got ${value.length} characters)`
+        : ''),
+  );
+}
+
 const REQUIRED = ['base', 'choice', 'library', 'memory', 'profiles'];
 const REQUIRED_SET = new Set(REQUIRED);
 // Older configurations carried an explicit consumer skill selection and/or a
@@ -1082,6 +1125,10 @@ async function prerequisites(
 }
 
 export function action(): Dict {
+  // The generated identifier must satisfy T3's script-ID rule; a
+  // generation-time assertion keeps a future rename from emitting an
+  // action every consumer import refuses.
+  assert_valid_action_id(ACTION_ID);
   const command = `node ${BOOTSTRAP_MJS}`;
   return new Map<string, unknown>([
     ['id', ACTION_ID],
@@ -1092,6 +1139,39 @@ export function action(): Dict {
     ['runOnSettle', false],
     ['async', false],
   ]);
+}
+
+/**
+ * The managed action under any of its identifiers: an entry whose `id`
+ * is `ACTION_ID` or a retired `LEGACY_ACTION_IDS` member is compared
+ * with the current `id`; every other entry is returned unchanged.
+ */
+function with_managed_id(item: Dict): Dict {
+  const id = dictGetOr(item, 'id', null);
+  return id === ACTION_ID || LEGACY_ACTION_IDS.includes(id as string)
+    ? dictSpread(item, 'id', ACTION_ID)
+    : item;
+}
+
+/**
+ * Whether `command` keeps the generated launcher invocation and
+ * composes additional work after it — the consumer-owned composition
+ * ``action_plan`` preserves byte-for-byte.
+ */
+function composed_command(command: unknown): boolean {
+  let tokens: string[];
+  try {
+    tokens = shlexSplit(String(command ?? ''));
+  } catch (error) {
+    if (error instanceof ValueError) return false;
+    throw error;
+  }
+  const prefix = shlexSplit(`node ${BOOTSTRAP_MJS}`);
+  return (
+    prefix.every((token, index) => tokens[index] === token) &&
+    tokens.length > prefix.length + 1 &&
+    tokens[prefix.length] === '&&'
+  );
 }
 
 /**
@@ -1106,9 +1186,35 @@ export function python_era_action(item: unknown): boolean {
   return (
     dictGetOr(item as Dict, 'command', null) === `python3 ${BOOTSTRAP}` &&
     pyEq(
-      dictSpread(item as Dict, 'command', dictGet(expected, 'command')),
+      dictSpread(
+        with_managed_id(item as Dict),
+        'command',
+        dictGet(expected, 'command'),
+      ),
       expected,
     )
+  );
+}
+
+/**
+ * Whether a t3.json script entry is the managed readiness action still
+ * carrying a retired identifier — a non-Python entry ``--configure-action``
+ * migrates by rewriting only the `id` in place, composed command and
+ * every other field preserved.
+ */
+export function legacy_id_action(item: unknown): boolean {
+  if (!isDict(item)) return false;
+  const id = dictGetOr(item as Dict, 'id', null);
+  if (!LEGACY_ACTION_IDS.includes(id as string)) return false;
+  const expected = action();
+  const normalized = with_managed_id(item as Dict);
+  return (
+    pyEq(normalized, expected) ||
+    (composed_command(dictGetOr(item as Dict, 'command', '')) &&
+      pyEq(
+        dictSpread(normalized, 'command', dictGet(expected, 'command')),
+        expected,
+      ))
   );
 }
 
@@ -1218,6 +1324,9 @@ async function action_plan(root: string): Promise<Plan> {
     }
     if (
       dictGetOr(item as Dict, 'id', null) === ACTION_ID ||
+      LEGACY_ACTION_IDS.includes(
+        dictGetOr(item as Dict, 'id', null) as string,
+      ) ||
       pyCasefold(pyStrip(String(dictGetOr(item as Dict, 'name', '')))) ===
         pyCasefold(dictGet(expected, 'name') as string) ||
       pyStrip(String(dictGetOr(item as Dict, 'command', ''))) ===
@@ -1231,46 +1340,77 @@ async function action_plan(root: string): Promise<Plan> {
   // Preserve its bytes; do not execute or claim to validate the appended work.
   if (matches.length === 1) {
     const candidate = matches[0];
-    let tokens: string[];
-    try {
-      tokens = shlexSplit(String(dictGetOr(candidate, 'command', '')));
-    } catch (error) {
-      if (error instanceof ValueError) tokens = [];
-      else throw error;
+    const normalized = with_managed_id(candidate);
+    // The exact expected action — nothing to write.
+    if (pyEq(candidate, expected)) {
+      return [path, previous, previous];
     }
-    const prefix = shlexSplit(dictGet(expected, 'command') as string);
-    const composed =
-      prefix.every((token, i) => tokens[i] === token) &&
-      tokens.length > prefix.length + 1 &&
-      tokens[prefix.length] === '&&';
+    // The valid composed form: bytes stay when the id is current; a
+    // retired identifier is rewritten to ACTION_ID in place, composed
+    // command and every other field and entry preserved.
     if (
-      composed &&
+      composed_command(dictGetOr(candidate, 'command', '')) &&
       pyEq(
-        dictSpread(candidate, 'command', dictGet(expected, 'command')),
+        dictSpread(normalized, 'command', dictGet(expected, 'command')),
         expected,
       )
     ) {
-      return [path, previous, previous];
+      if (dictGetOr(candidate, 'id', null) === ACTION_ID) {
+        return [path, previous, previous];
+      }
+      const next = dictSpread(
+        current as Dict,
+        'scripts',
+        (scripts as unknown[]).map((entry) =>
+          entry === candidate
+            ? dictSpread(candidate, 'id', ACTION_ID)
+            : entry,
+        ),
+      );
+      validate_t3(next);
+      return [
+        path,
+        previous,
+        Buffer.from(`${await jsonDumps(next)}\n`, 'utf8'),
+      ];
     }
-  }
-  // An exact Python-era action is updated in place — the generated
-  // `.mjs` command replaces `python3 .agent-workflows-t3.py`.
-  if (matches.length === 1) {
-    const item = matches[0];
+    // An exact Python-era action is updated in place — the generated
+    // `.mjs` command replaces `python3 .agent-workflows-t3.py` and a
+    // retired identifier becomes ACTION_ID.
     if (
-      dictGetOr(item, 'command', null) === `python3 ${BOOTSTRAP}` &&
-      pyEq(dictSpread(item, 'command', dictGet(expected, 'command')), expected)
+      dictGetOr(candidate, 'command', null) === `python3 ${BOOTSTRAP}` &&
+      pyEq(
+        dictSpread(normalized, 'command', dictGet(expected, 'command')),
+        expected,
+      )
     ) {
       const updated = dictSpread(
-        item,
-        'command',
-        dictGet(expected, 'command'),
+        dictSpread(candidate, 'command', dictGet(expected, 'command')),
+        'id',
+        ACTION_ID,
       );
       const next = dictSpread(
         current as Dict,
         'scripts',
         (scripts as unknown[]).map((entry) =>
-          entry === item ? updated : entry,
+          entry === candidate ? updated : entry,
+        ),
+      );
+      validate_t3(next);
+      return [
+        path,
+        previous,
+        Buffer.from(`${await jsonDumps(next)}\n`, 'utf8'),
+      ];
+    }
+    // The plain action carrying a retired identifier: rewrite the id
+    // in place, every other field and entry preserved.
+    if (pyEq(normalized, expected)) {
+      const next = dictSpread(
+        current as Dict,
+        'scripts',
+        (scripts as unknown[]).map((entry) =>
+          entry === candidate ? normalized : entry,
         ),
       );
       validate_t3(next);
@@ -1281,14 +1421,11 @@ async function action_plan(root: string): Promise<Plan> {
       ];
     }
   }
-  if (matches.length && !pyEq(matches, [expected])) {
+  if (matches.length) {
     throw new ValueError(
       'Existing action identity, command or creation role conflicts; ' +
         'review and compose explicitly',
     );
-  }
-  if (matches.length) {
-    return [path, previous, previous];
   }
   dictSet(current as Dict, 'scripts', [
     ...(scripts as unknown[]),

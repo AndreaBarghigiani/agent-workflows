@@ -5,6 +5,10 @@ semantic versioning; see [Release versioning](docs/skill-distribution.md#release
 
 ## [Unreleased]
 
+### Fixed
+
+- The generated T3 action id changes from `agent-workflows-checkout-readiness` to `agent-workflows-ready`: T3 limits script IDs to 24 characters and rejected the retired id when an entry carrying it reached a project update. `t3_readiness --configure-action` rewrites a retired-ID entry in place after the pin bump (plain, composed and Python-era entries), `update plan` lists the follow-up, and a generation-time check enforces the rule; re-import the action in T3 project settings after regeneration.
+
 ## [0.6.1] - 2026-11-23
 
 Recognize untouched v0.4–v0.5 connection routing as stale.

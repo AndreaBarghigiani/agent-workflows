@@ -71,6 +71,7 @@ import {
   BOOTSTRAP as T3_BOOTSTRAP,
   BOOTSTRAP_MJS as T3_BOOTSTRAP_MJS,
   CONFIG as T3_CONFIG,
+  legacy_id_action,
   python_era_action,
   validate_config as validateT3Config,
 } from './t3_readiness.ts';
@@ -1847,9 +1848,10 @@ function phaseLinkPreflight(state: PlanState): void {
 
 /**
  * T3 phase: the TypeScript cutover — an old pin shipping
- * scripts/t3_readiness.py moving to a dispatcher pin, or a still-Python
- * action command. Listed after the memory refresh: t3_readiness needs
- * the committed pin.
+ * scripts/t3_readiness.py moving to a dispatcher pin, a still-Python
+ * action command, or the managed action still carrying the retired
+ * identifier T3's 24-character script-ID limit rejects. Listed after
+ * the memory refresh: t3_readiness needs the committed pin.
  */
 function phaseT3(state: PlanState): void {
   const { run } = state;
@@ -1881,6 +1883,7 @@ function phaseT3(state: PlanState): void {
   }
   const crosses = oldHas === true && newHas === true;
   let pythonAction = false;
+  let legacyIdAction = false;
   const strayLaunchers: string[] = [];
   const t3Json = join(resolvedProject, 't3.json');
   if (isFile(t3Json)) {
@@ -1891,6 +1894,8 @@ function phaseT3(state: PlanState): void {
         for (const item of scripts) {
           if (python_era_action(item)) {
             pythonAction = true;
+          } else if (legacy_id_action(item)) {
+            legacyIdAction = true;
           } else if (
             typeof item === 'object' &&
             item !== null &&
@@ -1920,7 +1925,7 @@ function phaseT3(state: PlanState): void {
         ' review the extra launcher(s) separately',
     );
   }
-  if (crosses || pythonAction) {
+  if (crosses || pythonAction || legacyIdAction) {
     state.cutover = {
       commands: [
         helperCommand(state, 't3_readiness.py', ['--check']),
@@ -1929,24 +1934,49 @@ function phaseT3(state: PlanState): void {
       ],
       when: 'after the owner commits the pin',
       reason:
-        'the update crosses the TypeScript cutover; the generated T3' +
-        ' action must migrate to the dispatcher bootstrap, and' +
-        ' t3_readiness refuses until the committed pin matches; commit' +
-        ' the regenerated action as the follow-up to the pin bump.' +
-        ' The first --check is expected to fail with one of two' +
-        ' diagnostics: the stale-launcher migration error' +
-        ` (\`Generated bootstrap ${T3_BOOTSTRAP} needs migration to` +
-        ` ${T3_BOOTSTRAP_MJS}\`) or a generated-asset diagnostic` +
-        ' matching `Generated asset missing: <asset>; run' +
-        ' --configure-action` (for example `t3.json` or' +
-        ` \`${T3_BOOTSTRAP_MJS}\`); continue to --configure-action` +
-        ' only on one of those diagnostics and report any other' +
-        ' failure',
+        crosses || pythonAction
+          ? 'the update crosses the TypeScript cutover; the generated T3' +
+            ' action must migrate to the dispatcher bootstrap, and' +
+            ' t3_readiness refuses until the committed pin matches; commit' +
+            ' the regenerated action as the follow-up to the pin bump.' +
+            ' The first --check is expected to fail with one of two' +
+            ' diagnostics: the stale-launcher migration error' +
+            ` (\`Generated bootstrap ${T3_BOOTSTRAP} needs migration to` +
+            ` ${T3_BOOTSTRAP_MJS}\`) or a generated-asset diagnostic` +
+            ' matching `Generated asset missing: <asset>; run' +
+            ' --configure-action` (for example `t3.json` or' +
+            ` \`${T3_BOOTSTRAP_MJS}\`); continue to --configure-action` +
+            ' only on one of those diagnostics and report any other' +
+            ' failure'
+          : 'the managed T3 action still carries the retired id' +
+            ' `agent-workflows-checkout-readiness`, which T3 rejects' +
+            ' (script IDs are limited to 24 characters);' +
+            ' --configure-action rewrites it to `agent-workflows-ready`' +
+            ' in place, preserving a composed command and unrelated' +
+            ' entries; commit the regenerated t3.json as the follow-up' +
+            ' to the pin bump. The first --check is expected to fail' +
+            ' with `Generated asset missing: t3.json; run' +
+            ' --configure-action`; continue to --configure-action only' +
+            ' on that diagnostic and report any other failure',
     };
-    state.notes.push(
-      `the stale ${T3_BOOTSTRAP} is the owner's to remove — the` +
-        ' library never deletes it',
-    );
+    if (crosses || pythonAction) {
+      state.notes.push(
+        `the stale ${T3_BOOTSTRAP} is the owner's to remove — the` +
+          ' library never deletes it',
+      );
+    }
+    if (legacyIdAction) {
+      state.notes.push(
+        're-import the action in T3 project settings (Actions ->' +
+          ' Import scripts -> Import from t3.json) after the pin bump' +
+          ' and regeneration',
+      );
+      state.notes.push(
+        'T3 assigns GUI-imported and hand-created actions an ID derived' +
+          ' from the action name, so an effective action\'s ID can' +
+          ' differ from the id in t3.json; that is expected, not drift',
+      );
+    }
   }
 }
 

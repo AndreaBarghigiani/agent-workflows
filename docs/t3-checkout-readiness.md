@@ -203,6 +203,17 @@ action has `runOnWorktreeCreate: true`, `async: false`, `runOnSettle: false` and
 preview URL requirement. GUI labels and permission scopes can differ by version;
 #34 documents override resolution and the distinct GUI/MCP write permissions.
 
+The generated action's `id` must satisfy T3's script-ID rule: 1-24 lowercase
+letters, digits or hyphens, starting with a letter or digit. Earlier generated
+files carried the retired 34-character `agent-workflows-checkout-readiness` id,
+which T3 rejects on project updates. When a pin bump changes the identifier, run
+`--configure-action` to rewrite the `id` in place — a composed command and
+unrelated entries are preserved — commit the regenerated `t3.json`, then
+re-import the action as above. Separately, T3 assigns GUI-imported and
+hand-created actions their own ID derived from the action name, so the
+effective action's ID can differ from the `id` in `t3.json`; that is expected,
+not drift.
+
 Before claiming delivery, verify these separate milestones on an authorized
 disposable/pilot project:
 
