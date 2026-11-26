@@ -9,6 +9,10 @@ numbering restarts here.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-26
+
+Run Antigravity Gemini delegates through T3 Code and align MCP services into Antigravity's workspace configuration.
+
 ### Added
 
 - [Antigravity setup](docs/antigravity.md): an evidence-based guide to running Antigravity Gemini delegates through T3 Code's ACP integration. It covers provider, model and `thought_level` selection, Google sign-in routes, rule and skill discovery, harness worktrees, project `.agents/mcp_config.json` MCP servers, and the remaining gaps.
