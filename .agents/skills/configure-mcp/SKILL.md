@@ -1,6 +1,6 @@
 ---
 name: configure-mcp
-description: Check this project's MCP requirements and align selected services with Claude, Codex and OpenCode on this machine; check-only by default, edits only after explicit owner confirmation of a redacted plan.
+description: Check this project's MCP requirements and align selected services with Claude, Codex, OpenCode and Antigravity on this machine; check-only by default, edits only after explicit owner confirmation of a redacted plan.
 ---
 
 # Configure MCP
@@ -11,7 +11,8 @@ configuration covers them on this machine, and — only after explicit owner
 confirmation of a reviewed plan — apply the bounded edits that align the
 selected services. Covered clients: Claude (`.mcp.json` plus the
 `.claude/settings.local.json` approval signals), Codex
-(`.codex/config.toml`), OpenCode (`opencode.json`). The manifest contract is
+(`.codex/config.toml`), OpenCode (`opencode.json`), and Antigravity
+(`.agents/mcp_config.json`, opt-in via `--clients`). The manifest contract is
 documented in [MCP service requirements](../../../docs/mcp-requirements.md);
 all work goes through the deterministic helper
 [`scripts/mcp_configure.ts`](../../../scripts/mcp_configure.ts).
@@ -23,7 +24,7 @@ installation or authentication changes, ever:
 
 ```bash
 node bin/agent-workflows.ts mcp_configure check --root . \
-  --clients claude,codex,opencode [--mapping FILE] [--machine FILE]
+  --clients claude,codex,opencode,antigravity [--mapping FILE] [--machine FILE]
 ```
 
 `--mapping` is a JSON file holding the owner's confirmed

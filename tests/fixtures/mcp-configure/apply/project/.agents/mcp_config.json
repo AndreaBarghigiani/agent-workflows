@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "mem": {
+      "serverUrl": "https://memory.example.test/mcp"
+    },
+    "blocked": {
+      "serverUrl": "https://blocked.example.test/mcp",
+      "disabled": true
+    },
+    "moved": {
+      "serverUrl": "https://elsewhere.example.test/mcp"
+    },
+    "unrelated": {
+      "command": "secret-runner",
+      "args": ["--api-key", "SECRET_SENTINEL-do-not-emit"],
+      "env": {
+        "API_KEY": "SECRET_SENTINEL-do-not-emit"
+      }
+    }
+  },
+  "ownerNote": "preserve-me"
+}

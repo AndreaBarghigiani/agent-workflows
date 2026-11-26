@@ -4,6 +4,7 @@
 // docs/node-port.md.
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import {
   cpSync,
@@ -2052,4 +2053,1923 @@ test('test_single_underscore_names_remain_valid', () => {
   assert.equal(mc.registrationNameProblem('basic_memory_nas'), null);
   assert.equal(mc.registrationNameProblem('x_y'), null);
   assert.ok(mc.registrationNameProblem('victim__read') !== null);
+});
+
+// --- AntigravityTests -------------------------------------------------------
+
+test('test_antigravity_inspection_covers_shapes_redaction_and_notes', () => {
+  const snapshot = mc.inspectProject(PROJECT, ['antigravity']);
+  const ag = get(snapshot, 'antigravity');
+  assert.equal(get(ag, 'path'), '.agents/mcp_config.json');
+  assert.equal(get(ag, 'present'), true);
+  assert.equal(get(ag, 'readable'), true);
+  assert.ok(!has(ag, 'approvals'));
+  const entries = get(ag, 'entries');
+
+  // Remote serverUrl
+  const memory = get(entries, 'memory');
+  assert.equal(get(memory, 'transport'), 'remote');
+  assert.equal(get(memory, 'inspection'), 'ok');
+  assert.equal(get(memory, 'url'), 'https://memory.example.test');
+  assert.deepEqual(get(memory, 'notes'), []);
+
+  // Remote url alias
+  const alias = get(entries, 'docs_alias');
+  assert.equal(get(alias, 'transport'), 'remote');
+  assert.equal(get(alias, 'inspection'), 'ok');
+  assert.equal(get(alias, 'url'), 'https://docs.example.test');
+
+  // Both serverUrl and url: serverUrl wins with a note
+  const both = get(entries, 'both_urls');
+  assert.equal(get(both, 'transport'), 'remote');
+  assert.equal(get(both, 'inspection'), 'ok');
+  assert.equal(get(both, 'url'), 'https://primary.example.test');
+  assert.ok(
+    (get(both, 'notes') as string[]).some(
+      (n) => n.includes('serverUrl') && n.includes('url'),
+    ),
+  );
+
+  // httpUrl is unsupported
+  const httpUrl = get(entries, 'legacy_http');
+  assert.equal(get(httpUrl, 'inspection'), 'unsupported');
+  assert.ok(
+    (get(httpUrl, 'notes') as string[]).some((n) => n.includes('httpUrl')),
+  );
+
+  // Literal Authorization header: name only, no env_refs, literal note, redacted
+  const tracker = get(entries, 'tracker');
+  assert.equal(get(tracker, 'transport'), 'remote');
+  assert.equal(get(tracker, 'inspection'), 'ok');
+  assert.deepEqual(get(tracker, 'header_names'), ['Authorization']);
+  assert.deepEqual(get(tracker, 'env_refs'), []);
+  assert.ok(
+    (get(tracker, 'notes') as string[]).some(
+      (n) =>
+        n.includes('literal header value(s) present: Authorization') &&
+        n.includes('does not interpolate'),
+    ),
+  );
+
+  // Reference-like header syntax is passed literally (not expanded) + oauth note
+  const refLiteral = get(entries, 'ref_literal');
+  assert.deepEqual(get(refLiteral, 'header_names'), ['Authorization']);
+  assert.deepEqual(get(refLiteral, 'env_refs'), []);
+  assert.ok(
+    (get(refLiteral, 'notes') as string[]).some((n) =>
+      n.includes('passes literally (not expanded)'),
+    ),
+  );
+  assert.ok(
+    (get(refLiteral, 'notes') as string[]).some(
+      (n) => n.includes('oauth') && n.includes('owner decision'),
+    ),
+  );
+
+  // Stdio entry with known extra keys, literal env values, and $VAR note
+  const lint = get(entries, 'lint');
+  assert.equal(get(lint, 'transport'), 'stdio');
+  assert.equal(get(lint, 'inspection'), 'ok');
+  assert.equal(get(lint, 'command'), 'lint-mcp');
+  assert.equal(get(lint, 'args'), 1);
+  assert.deepEqual(get(lint, 'env_names'), ['EXPAND_TEST', 'LINT_BACKEND_TOKEN']);
+  assert.deepEqual(get(lint, 'env_refs'), []);
+  assert.ok(
+    !(get(lint, 'notes') as string[]).some((n) =>
+      n.includes('unrecognized fields'),
+    ),
+  );
+  assert.ok(
+    (get(lint, 'notes') as string[]).some(
+      (n) =>
+        n.includes('EXPAND_TEST') &&
+        n.includes('passes literally (not expanded)'),
+    ),
+  );
+
+  // disabled: true sets enabled = false
+  const disabled = get(entries, 'disabled_srv');
+  assert.equal(get(disabled, 'enabled'), false);
+
+  // Unrecognized fields are noted
+  const extra = get(entries, 'extra_fields');
+  assert.equal(get(extra, 'inspection'), 'ok');
+  assert.ok(
+    (get(extra, 'notes') as string[]).some((n) =>
+      n.includes('unrecognized fields: mysteryField'),
+    ),
+  );
+
+  // Secret sentinel never appears anywhere in emitted snapshot
+  const json = jsonDumps(snapshot);
+  assert.ok(!json.includes(SENTINEL));
+  for (const value of strings(snapshot)) {
+    assert.ok(!value.includes(SENTINEL));
+  }
+});
+
+test('test_antigravity_assess_classifies_remote_auth_stdio_and_disabled', () => {
+  const report = mc.assess(PROJECT, {
+    clients: ['antigravity'],
+    machine: {
+      ...MACHINE,
+      executables: new Set(['lint-mcp']),
+    } as unknown as Dict,
+    mapping: {
+      'basic-memory': { antigravity: 'memory' },
+      'docs-api': { antigravity: 'docs_alias' },
+      'issue-tracker': { antigravity: 'tracker' },
+      'local-lint': { antigravity: 'lint' },
+      'docs-search': { antigravity: 'disabled_srv' },
+    },
+  });
+  assert.equal(get(result(report, 'basic-memory', 'antigravity'), 'state'), 'satisfied');
+  assert.equal(get(result(report, 'docs-api', 'antigravity'), 'state'), 'satisfied');
+  assert.equal(
+    get(result(report, 'issue-tracker', 'antigravity'), 'state'),
+    'unsupported',
+  );
+  assert.ok(
+    (
+      get(result(report, 'issue-tracker', 'antigravity'), 'diagnostics') as string[]
+    ).some((d) => d.includes('does not expand environment references')),
+  );
+  // PROJECT's lint entry carries EXPAND_TEST: "$MY_VAR" — policy (c) refuses
+  // reuse when env values contain unexpanded reference syntax.
+  assert.equal(
+    get(result(report, 'local-lint', 'antigravity'), 'state'),
+    'unsupported',
+  );
+  assert.ok(
+    (
+      get(result(report, 'local-lint', 'antigravity'), 'diagnostics') as string[]
+    ).some(
+      (d) =>
+        d.includes('EXPAND_TEST') &&
+        d.includes('MY_VAR') &&
+        d.includes('does not expand environment references'),
+    ),
+  );
+  assert.equal(
+    get(result(report, 'docs-search', 'antigravity'), 'state'),
+    'conflict',
+  );
+  assert.deepEqual(get(report, 'prerequisites'), []);
+  const reportJson = jsonDumps(report);
+  assert.ok(!reportJson.includes(SENTINEL));
+  assert.ok(!reportJson.includes('$MY_VAR'));
+});
+
+test('test_antigravity_plan_and_apply_stdio_oauth_unsupported_reenable_and_preserve', () => {
+  const root = ensureApplyRoot();
+  const mapping = {
+    memory: { antigravity: 'mem' },
+    tracker: { antigravity: 'tracker' },
+    lint: { antigravity: 'lint' },
+    blocked: { antigravity: 'blocked' },
+    moved: { antigravity: 'moved' },
+    'oauth-docs': { antigravity: 'oauth-docs' },
+  };
+  const plan = mc.buildPlan(
+    root,
+    mapping,
+    ['memory', 'tracker', 'lint', 'blocked', 'moved', 'oauth-docs'],
+    {
+      clients: ['antigravity'],
+      machine: APPLY_MACHINE as unknown as Dict,
+    },
+  );
+  assert.deepEqual(get(plan, 'prerequisites'), []);
+  assert.deepEqual(
+    keysOf(get(plan, 'files')),
+    ['.agents/mcp_config.json'],
+  );
+
+  // Existing no-auth remote reuses cleanly
+  assert.equal(get(action(plan, 'memory', 'antigravity'), 'action'), 'reuse');
+
+  // Remote api-key is unsupported: no entry, no headers
+  const trackerAct = action(plan, 'tracker', 'antigravity');
+  assert.equal(get(trackerAct, 'action'), 'unsupported');
+  assert.equal(get(trackerAct, 'entry'), null);
+  assert.ok(
+    (get(trackerAct, 'diagnostics') as string[]).some(
+      (d) =>
+        d.includes('does not expand environment references') &&
+        d.includes('1.5.18'),
+    ),
+  );
+
+  // Stdio service: command + args only, NO env written, credential is a prerequisite
+  const lintAct = action(plan, 'lint', 'antigravity');
+  assert.equal(get(lintAct, 'action'), 'add');
+  assert.deepEqual(toPlain(get(lintAct, 'entry')), {
+    command: 'lint-mcp',
+    args: ['--stdio'],
+  });
+  assert.ok(!has(get(lintAct, 'entry'), 'env'));
+  assert.ok(
+    (get(lintAct, 'prerequisites') as string[]).some(
+      (p) =>
+        p.includes('LINT_BACKEND_TOKEN') &&
+        p.includes('environment T3 launches Antigravity with'),
+    ),
+  );
+
+  // Remote OAuth: serverUrl only, interactive prerequisite
+  const oauthAct = action(plan, 'oauth-docs', 'antigravity');
+  assert.equal(get(oauthAct, 'action'), 'add');
+  assert.deepEqual(toPlain(get(oauthAct, 'entry')), {
+    serverUrl: 'https://oauth.example.test/mcp',
+  });
+  assert.ok(
+    (get(oauthAct, 'prerequisites') as string[]).some((p) =>
+      p.includes('interactive'),
+    ),
+  );
+
+  // Disabled & moved entries are conflicts
+  assert.equal(
+    get(action(plan, 'blocked', 'antigravity'), 'action'),
+    'conflict-needs-resolution',
+  );
+  assert.equal(
+    get(action(plan, 'moved', 'antigravity'), 'action'),
+    'conflict-needs-resolution',
+  );
+
+  // Plan is redacted
+  assert.ok(!jsonDumps(plan).includes(SENTINEL));
+
+  // Confirm with reenable + replace and apply
+  confirm(plan, {
+    'blocked antigravity': { kind: 'reenable' },
+    'moved antigravity': { kind: 'replace' },
+  });
+  const outcome = mc.apply(plan);
+  assert.deepEqual(get(outcome, 'files_written'), ['.agents/mcp_config.json']);
+
+  const configPath = join(root, '.agents', 'mcp_config.json');
+  const written = readJson(configPath);
+  const servers = get(written, 'mcpServers');
+
+  // Top-level keys and unrelated mcpServers entry are preserved
+  assert.equal(get(written, 'ownerNote'), 'preserve-me');
+  assert.deepEqual(toPlain(get(servers, 'unrelated')), {
+    command: 'secret-runner',
+    args: ['--api-key', SENTINEL],
+    env: { API_KEY: SENTINEL },
+  });
+  assert.deepEqual(toPlain(get(servers, 'mem')), {
+    serverUrl: 'https://memory.example.test/mcp',
+  });
+  // Reenabled: disabled key removed, serverUrl preserved
+  assert.deepEqual(toPlain(get(servers, 'blocked')), {
+    serverUrl: 'https://blocked.example.test/mcp',
+  });
+  // Replaced: moved endpoint updated
+  assert.deepEqual(toPlain(get(servers, 'moved')), {
+    serverUrl: 'https://moved.example.test/mcp',
+  });
+  // Added stdio & oauth; unsupported tracker NOT written
+  assert.deepEqual(toPlain(get(servers, 'lint')), {
+    command: 'lint-mcp',
+    args: ['--stdio'],
+  });
+  assert.deepEqual(toPlain(get(servers, 'oauth-docs')), {
+    serverUrl: 'https://oauth.example.test/mcp',
+  });
+  assert.ok(!has(servers, 'tracker'));
+
+  // Double-apply is a verified no-op
+  const afterFirst = readFileSync(configPath, 'utf8');
+  const second = mc.apply(plan);
+  assert.deepEqual(get(second, 'files_written'), []);
+  assert.equal(readFileSync(configPath, 'utf8'), afterFirst);
+
+  // Post-apply assess: oauth-docs and lint (no env) are auth-unverified, not conflict
+  const postReport = mc.assess(root, {
+    clients: ['antigravity'],
+    machine: APPLY_MACHINE as unknown as Dict,
+    mapping,
+  });
+  assert.equal(
+    get(result(postReport, 'oauth-docs', 'antigravity'), 'state'),
+    'auth-unverified',
+  );
+  assert.equal(
+    get(result(postReport, 'lint', 'antigravity'), 'state'),
+    'auth-unverified',
+  );
+  assert.equal(
+    get(result(postReport, 'blocked', 'antigravity'), 'state'),
+    'satisfied',
+  );
+  assert.equal(
+    get(result(postReport, 'tracker', 'antigravity'), 'state'),
+    'unsupported',
+  );
+
+  // Re-planning lint after apply reuses it with inherited-env prerequisite
+  const replan = mc.buildPlan(root, mapping, ['lint'], {
+    clients: ['antigravity'],
+    machine: APPLY_MACHINE as unknown as Dict,
+  });
+  const reusedLint = action(replan, 'lint', 'antigravity');
+  assert.equal(get(reusedLint, 'action'), 'reuse');
+  assert.ok(
+    (get(reusedLint, 'prerequisites') as string[]).some((p) =>
+      p.includes('LINT_BACKEND_TOKEN'),
+    ),
+  );
+});
+
+test('test_antigravity_bare_project_adds_remote_no_auth_and_creates_agents_dir', () => {
+  const temp = makeTemp();
+  try {
+    const bare = join(temp, 'bare');
+    cpSync(APPLY_BARE, bare, { recursive: true });
+    // Add a remote no-auth service to the bare copy's manifest
+    const manifestPath = join(bare, '.agents', 'mcp-requirements.json');
+    const manifest = readJsonText(readFileSync(manifestPath, 'utf8'));
+    (manifest['services'] as Record<string, unknown>[]).push({
+      id: 'public-docs',
+      purpose: 'Public remote documentation server without auth.',
+      required: false,
+      workflows: ['*'],
+      guidance: ['docs/guide.md'],
+      connection: {
+        type: 'remote',
+        url: 'https://docs.example.test/mcp',
+      },
+      verification: {
+        description: 'Read-only docs search.',
+        read_only: true,
+      },
+    });
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const plan = confirm(
+      mc.buildPlan(
+        bare,
+        {
+          'public-docs': { antigravity: 'docs' },
+          tracker: { antigravity: 'tracker' },
+        },
+        ['public-docs', 'tracker'],
+        {
+          clients: ['antigravity'],
+          machine: APPLY_MACHINE as unknown as Dict,
+        },
+      ),
+    );
+    assert.equal(
+      get(action(plan, 'public-docs', 'antigravity'), 'action'),
+      'add',
+    );
+    assert.deepEqual(
+      toPlain(get(action(plan, 'public-docs', 'antigravity'), 'entry')),
+      { serverUrl: 'https://docs.example.test/mcp' },
+    );
+    assert.equal(
+      get(action(plan, 'tracker', 'antigravity'), 'action'),
+      'unsupported',
+    );
+    // Remove .agents before apply to verify apply creates .agents/ if missing
+    rmSync(join(bare, '.agents'), { recursive: true, force: true });
+    const outcome = mc.apply(plan);
+    assert.deepEqual(get(outcome, 'files_written'), ['.agents/mcp_config.json']);
+    const written = readJson(join(bare, '.agents', 'mcp_config.json'));
+    assert.deepEqual(toPlain(get(get(written, 'mcpServers'), 'docs')), {
+      serverUrl: 'https://docs.example.test/mcp',
+    });
+    assert.ok(!has(get(written, 'mcpServers'), 'tracker'));
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('test_antigravity_source_literal_header_never_yields_bearer_ref', () => {
+  const plan = mc.buildPlan(
+    PROJECT,
+    { 'docs-api': { claude: 'from-ag', antigravity: 'ref_literal' } },
+    {
+      'docs-api': {
+        clients: ['claude', 'antigravity'],
+        source: { client: 'antigravity', registration: 'ref_literal' },
+      },
+    },
+    {
+      clients: ['claude', 'antigravity'],
+      machine: MACHINE as unknown as Dict,
+    },
+  );
+  const claudeAct = action(plan, 'docs-api', 'claude');
+  assert.equal(get(claudeAct, 'action'), 'add');
+  assert.deepEqual(toPlain(get(claudeAct, 'entry')), {
+    type: 'http',
+    url: 'https://ref.example.test/mcp',
+  });
+  assert.ok(
+    (get(claudeAct, 'untranslated') as string[]).some((item) =>
+      item.includes('Authorization'),
+    ),
+  );
+  assert.ok(!jsonDumps(get(claudeAct, 'entry')).includes('TRACKER_API_TOKEN'));
+});
+
+test('test_antigravity_cli_check_and_opt_in_default', () => {
+  const [code, out, err] = runCli([
+    'check',
+    '--root',
+    PROJECT,
+    '--clients',
+    'antigravity',
+  ]);
+  assert.equal(code, 0, err);
+  assert.ok(!out.includes(SENTINEL));
+  const report = readJsonText(out);
+  assert.deepEqual(Object.keys(report['clients'] as Record<string, unknown>), [
+    'antigravity',
+  ]);
+  // Default without --clients stays claude, codex, opencode
+  const [defCode, defOut, defErr] = runCli(['check', '--root', PROJECT]);
+  assert.equal(defCode, 0, defErr);
+  const defReport = readJsonText(defOut);
+  assert.deepEqual(
+    Object.keys(defReport['clients'] as Record<string, unknown>),
+    ['claude', 'codex', 'opencode'],
+  );
+});
+
+test('test_antigravity_stdio_unexpanded_refs_refused_redacted', () => {
+  const cases: Array<{
+    label: string;
+    command: string[];
+    position: string;
+    varName: string;
+    forbidden: string[];
+  }> = [
+    {
+      label: 'braced ${NAME} in arg',
+      command: ['lint-mcp', '--endpoint', '${LINT_BACKEND_TOKEN}'],
+      position: '2',
+      varName: 'LINT_BACKEND_TOKEN',
+      forbidden: ['${LINT_BACKEND_TOKEN}'],
+    },
+    {
+      label: 'bare $NAME embedded with secret in arg',
+      command: ['lint-mcp', `--endpoint=https://${SENTINEL}/$LINT_BACKEND_TOKEN`],
+      position: '1',
+      varName: 'LINT_BACKEND_TOKEN',
+      forbidden: [SENTINEL, '$LINT_BACKEND_TOKEN', '--endpoint='],
+    },
+    {
+      label: 'opencode {env:NAME} in arg',
+      command: ['lint-mcp', '--header', 'X-Auth: {env:LINT_BACKEND_TOKEN}'],
+      position: '2',
+      varName: 'LINT_BACKEND_TOKEN',
+      forbidden: ['{env:LINT_BACKEND_TOKEN}', 'X-Auth:'],
+    },
+    {
+      label: 'reference in command itself (position 0)',
+      command: ['${BIN_DIR}/lint-mcp', '--stdio'],
+      position: '0',
+      varName: 'BIN_DIR',
+      forbidden: ['${BIN_DIR}/lint-mcp'],
+    },
+  ];
+
+  const root = ensureApplyRoot();
+  for (const tc of cases) {
+    const machine = {
+      ...APPLY_MACHINE,
+      local_config_refs: {
+        ...APPLY_MACHINE.local_config_refs,
+        LINT_MCP_COMMAND: { command: tc.command },
+      },
+    } as unknown as Dict;
+    const plan = mc.buildPlan(
+      root,
+      { lint: { antigravity: 'lint' } },
+      ['lint'],
+      { clients: ['antigravity'], machine },
+    );
+    const act = action(plan, 'lint', 'antigravity');
+    assert.equal(get(act, 'action'), 'unsupported', tc.label);
+    assert.equal(get(act, 'entry'), null, tc.label);
+    const diags = get(act, 'diagnostics') as string[];
+    assert.ok(
+      diags.some(
+        (d) =>
+          d.includes(`position ${tc.position}`) &&
+          d.includes(tc.varName) &&
+          d.includes('does not expand environment references') &&
+          d.includes('passed literally'),
+      ),
+      `${tc.label}: unexpected diagnostics ${JSON.stringify(diags)}`,
+    );
+    const serialized = jsonDumps(plan);
+    for (const bad of tc.forbidden) {
+      assert.ok(
+        !serialized.includes(bad),
+        `${tc.label}: leaked ${bad} in plan`,
+      );
+    }
+    const outcome = mc.apply(confirm(plan));
+    assert.deepEqual(get(outcome, 'files_written'), [], tc.label);
+  }
+
+  // Non-antigravity clients keep existing behavior for the same command
+  const claudePlan = mc.buildPlan(
+    root,
+    { lint: { claude: 'lint' } },
+    ['lint'],
+    {
+      clients: ['claude'],
+      machine: {
+        ...APPLY_MACHINE,
+        local_config_refs: {
+          ...APPLY_MACHINE.local_config_refs,
+          LINT_MCP_COMMAND: {
+            command: ['lint-mcp', '--endpoint', '${LINT_BACKEND_TOKEN}'],
+          },
+        },
+      } as unknown as Dict,
+    },
+  );
+  assert.equal(get(action(claudePlan, 'lint', 'claude'), 'action'), 'add');
+});
+
+test('test_antigravity_existing_remote_auth_matching_and_disabled_unsupported', () => {
+  const temp = makeTemp();
+  try {
+    // 1. Existing matching registration (PROJECT fixture: issue-tracker -> tracker)
+    const matchingRoot = join(temp, 'matching');
+    cpSync(PROJECT, matchingRoot, { recursive: true });
+    const matchingConfigPath = join(matchingRoot, '.agents', 'mcp_config.json');
+    const matchingBefore = readFileSync(matchingConfigPath, 'utf8');
+
+    const matchingReport = mc.assess(matchingRoot, {
+      clients: ['antigravity'],
+      machine: MACHINE as unknown as Dict,
+      mapping: { 'issue-tracker': { antigravity: 'tracker' } },
+    });
+    assert.equal(
+      get(result(matchingReport, 'issue-tracker', 'antigravity'), 'state'),
+      'unsupported',
+    );
+
+    const matchingPlan = mc.buildPlan(
+      matchingRoot,
+      { 'issue-tracker': { antigravity: 'tracker' } },
+      ['issue-tracker'],
+      { clients: ['antigravity'], machine: MACHINE as unknown as Dict },
+    );
+    const matchingAct = action(matchingPlan, 'issue-tracker', 'antigravity');
+    assert.equal(get(matchingAct, 'action'), 'unsupported');
+    assert.equal(get(matchingAct, 'entry'), null);
+    assert.equal(get(matchingAct, 'resolution'), null);
+    assert.ok(
+      (get(matchingAct, 'diagnostics') as string[]).some((d) =>
+        d.includes('does not expand environment references'),
+      ),
+    );
+    assert.deepEqual(keysOf(get(matchingPlan, 'files')), []);
+    assert.ok(!jsonDumps(matchingPlan).includes(SENTINEL));
+
+    // Confirm without recording any resolution; apply must succeed as a no-op
+    const matchingOutcome = mc.apply(confirm(matchingPlan));
+    assert.deepEqual(get(matchingOutcome, 'files_written'), []);
+    assert.equal(readFileSync(matchingConfigPath, 'utf8'), matchingBefore);
+
+    // 2. Existing disabled registration of an authenticated remote service
+    const disabledRoot = join(temp, 'disabled');
+    cpSync(PROJECT, disabledRoot, { recursive: true });
+    const disabledConfigPath = join(disabledRoot, '.agents', 'mcp_config.json');
+    const disabledDoc = readJsonText(readFileSync(disabledConfigPath, 'utf8'));
+    (
+      (disabledDoc['mcpServers'] as Record<string, Record<string, unknown>>)[
+        'tracker'
+      ]
+    )['disabled'] = true;
+    writeFileSync(
+      disabledConfigPath,
+      `${JSON.stringify(disabledDoc, null, 2)}\n`,
+    );
+    const disabledBefore = readFileSync(disabledConfigPath, 'utf8');
+
+    const disabledMappedReport = mc.assess(disabledRoot, {
+      clients: ['antigravity'],
+      machine: MACHINE as unknown as Dict,
+      mapping: { 'issue-tracker': { antigravity: 'tracker' } },
+    });
+    assert.equal(
+      get(
+        result(disabledMappedReport, 'issue-tracker', 'antigravity'),
+        'state',
+      ),
+      'unsupported',
+    );
+
+    const disabledUnmappedReport = mc.assess(disabledRoot, {
+      clients: ['antigravity'],
+      machine: MACHINE as unknown as Dict,
+    });
+    assert.equal(
+      get(
+        result(disabledUnmappedReport, 'issue-tracker', 'antigravity'),
+        'state',
+      ),
+      'unsupported',
+    );
+
+    const disabledPlan = mc.buildPlan(
+      disabledRoot,
+      { 'issue-tracker': { antigravity: 'tracker' } },
+      ['issue-tracker'],
+      { clients: ['antigravity'], machine: MACHINE as unknown as Dict },
+    );
+    const disabledAct = action(disabledPlan, 'issue-tracker', 'antigravity');
+    assert.equal(get(disabledAct, 'action'), 'unsupported');
+    assert.equal(get(disabledAct, 'entry'), null);
+    assert.equal(get(disabledAct, 'resolution'), null);
+    assert.ok(
+      (get(disabledAct, 'diagnostics') as string[]).some((d) =>
+        d.includes('does not expand environment references'),
+      ),
+    );
+    assert.deepEqual(keysOf(get(disabledPlan, 'files')), []);
+    assert.ok(!jsonDumps(disabledPlan).includes(SENTINEL));
+
+    // Confirm without recording any resolution; apply must succeed as a no-op
+    const disabledOutcome = mc.apply(confirm(disabledPlan));
+    assert.deepEqual(get(disabledOutcome, 'files_written'), []);
+    assert.equal(readFileSync(disabledConfigPath, 'utf8'), disabledBefore);
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('test_antigravity_credential_flag_with_ref_and_sentinel_fully_redacted', () => {
+  const root = ensureApplyRoot();
+  const combinedArg = `--api-\${TOKEN}-${SENTINEL}=other`;
+  const machine = {
+    ...APPLY_MACHINE,
+    local_config_refs: {
+      ...APPLY_MACHINE.local_config_refs,
+      LINT_MCP_COMMAND: {
+        command: ['lint-mcp', combinedArg],
+      },
+    },
+  } as unknown as Dict;
+
+  const report = mc.assess(root, {
+    clients: ['antigravity'],
+    machine,
+    mapping: { lint: { antigravity: 'lint' } },
+  });
+  const res = result(report, 'lint', 'antigravity');
+  assert.equal(get(res, 'state'), 'unsupported');
+  const checkSerialized = jsonDumps(report);
+  assert.ok(!checkSerialized.includes(SENTINEL));
+  assert.ok(!checkSerialized.includes('${'));
+  assert.ok(!checkSerialized.includes('--api-'));
+
+  const plan = mc.buildPlan(
+    root,
+    { lint: { antigravity: 'lint' } },
+    ['lint'],
+    { clients: ['antigravity'], machine },
+  );
+  const act = action(plan, 'lint', 'antigravity');
+  assert.equal(get(act, 'action'), 'unsupported');
+  assert.equal(get(act, 'entry'), null);
+  const diags = get(act, 'diagnostics') as string[];
+  assert.ok(
+    diags.some((d) => d.includes('position 1') && d.includes('TOKEN')),
+    `expected position/var-name diagnostic, got ${JSON.stringify(diags)}`,
+  );
+  assert.ok(
+    diags.some(
+      (d) => d.includes('position 1') && d.includes('looks credential-bearing'),
+    ),
+    `expected redacted credential-flag diagnostic, got ${JSON.stringify(diags)}`,
+  );
+  const planSerialized = jsonDumps(plan);
+  assert.ok(!planSerialized.includes(SENTINEL));
+  assert.ok(!planSerialized.includes('${'));
+  assert.ok(!planSerialized.includes('--api-'));
+  assert.deepEqual(keysOf(get(plan, 'files')), []);
+  const outcome = mc.apply(confirm(plan));
+  assert.deepEqual(get(outcome, 'files_written'), []);
+
+  // Credential-looking flag without reference syntax is also redacted on Antigravity
+  const flagOnlyMachine = {
+    ...APPLY_MACHINE,
+    local_config_refs: {
+      ...APPLY_MACHINE.local_config_refs,
+      LINT_MCP_COMMAND: {
+        command: ['lint-mcp', `--api-key=${SENTINEL}`],
+      },
+    },
+  } as unknown as Dict;
+  const flagOnlyPlan = mc.buildPlan(
+    root,
+    { lint: { antigravity: 'lint' } },
+    ['lint'],
+    { clients: ['antigravity'], machine: flagOnlyMachine },
+  );
+  const flagOnlyAct = action(flagOnlyPlan, 'lint', 'antigravity');
+  assert.equal(get(flagOnlyAct, 'action'), 'unsupported');
+  assert.equal(get(flagOnlyAct, 'entry'), null);
+  const flagOnlySerialized = jsonDumps(flagOnlyPlan);
+  assert.ok(!flagOnlySerialized.includes('--api-key'));
+  assert.ok(!flagOnlySerialized.includes(SENTINEL));
+
+  // Non-antigravity client keeps existing credentialArgs diagnostic wording
+  const claudeFlagPlan = mc.buildPlan(
+    root,
+    { lint: { claude: 'lint' } },
+    ['lint'],
+    { clients: ['claude'], machine: flagOnlyMachine },
+  );
+  const claudeFlagAct = action(claudeFlagPlan, 'lint', 'claude');
+  assert.equal(get(claudeFlagAct, 'action'), 'unsupported');
+  assert.ok(
+    (get(claudeFlagAct, 'diagnostics') as string[]).some((d) =>
+      d.includes('argument --api-key looks credential-bearing'),
+    ),
+  );
+});
+
+test('test_antigravity_unsafe_remote_urls_refused_machine_local_and_source', () => {
+  const temp = makeTemp();
+  try {
+    // 1. Machine-local endpoints carrying secrets or reference syntax
+    const bareRoot = join(temp, 'machine-local');
+    cpSync(APPLY_PROJECT, bareRoot, { recursive: true });
+    const configPath = join(bareRoot, '.agents', 'mcp_config.json');
+    const doc = readJsonText(readFileSync(configPath, 'utf8'));
+    delete (doc['mcpServers'] as Record<string, unknown>)['mem'];
+    writeFileSync(configPath, `${JSON.stringify(doc, null, 2)}\n`);
+    const before = readFileSync(configPath, 'utf8');
+
+    const urlCases: Array<{
+      label: string;
+      url: string;
+      expectFrag: string;
+      forbidden: string[];
+    }> = [
+      {
+        label: 'query string token',
+        url: `https://memory.example.test/mcp?token=${SENTINEL}`,
+        expectFrag: 'query string',
+        forbidden: [SENTINEL, '?token=', 'https://memory.example.test/mcp?'],
+      },
+      {
+        label: 'braced env ref in path',
+        url: 'https://memory.example.test/${TOKEN}',
+        expectFrag: 'TOKEN',
+        forbidden: ['${TOKEN}', '${', 'https://memory.example.test/'],
+      },
+      {
+        label: 'bare env ref in path',
+        url: 'https://memory.example.test/$TOKEN',
+        expectFrag: 'TOKEN',
+        forbidden: ['$TOKEN', 'https://memory.example.test/'],
+      },
+      {
+        label: 'opencode env ref in path',
+        url: 'https://memory.example.test/{env:TOKEN}',
+        expectFrag: 'TOKEN',
+        forbidden: ['{env:TOKEN}', 'https://memory.example.test/'],
+      },
+      {
+        label: 'userinfo credentials',
+        url: `https://user:${SENTINEL}@memory.example.test/mcp`,
+        expectFrag: 'userinfo',
+        forbidden: [SENTINEL, 'user:', 'memory.example.test/mcp'],
+      },
+      {
+        label: 'fragment token',
+        url: `https://memory.example.test/mcp#token=${SENTINEL}`,
+        expectFrag: 'fragment',
+        forbidden: [SENTINEL, '#token=', 'memory.example.test/mcp#'],
+      },
+    ];
+
+    for (const tc of urlCases) {
+      const machine = {
+        ...APPLY_MACHINE,
+        local_config_refs: {
+          ...APPLY_MACHINE.local_config_refs,
+          'machine-local memory profile': { endpoint: tc.url },
+        },
+      } as unknown as Dict;
+
+      const report = mc.assess(bareRoot, {
+        clients: ['antigravity'],
+        machine,
+        mapping: { memory: { antigravity: 'mem' } },
+      });
+      assert.equal(
+        get(result(report, 'memory', 'antigravity'), 'state'),
+        'unsupported',
+        `check ${tc.label}`,
+      );
+      const checkJson = jsonDumps(report);
+      for (const bad of tc.forbidden) {
+        assert.ok(
+          !checkJson.includes(bad),
+          `check ${tc.label}: leaked ${bad}`,
+        );
+      }
+
+      const plan = mc.buildPlan(
+        bareRoot,
+        { memory: { antigravity: 'mem' } },
+        ['memory'],
+        { clients: ['antigravity'], machine },
+      );
+      const act = action(plan, 'memory', 'antigravity');
+      assert.equal(get(act, 'action'), 'unsupported', `plan ${tc.label}`);
+      assert.equal(get(act, 'entry'), null, `plan ${tc.label}`);
+      assert.deepEqual(keysOf(get(plan, 'files')), [], `plan ${tc.label}`);
+      assert.ok(
+        (get(act, 'diagnostics') as string[]).some((d) =>
+          d.includes(tc.expectFrag),
+        ),
+        `plan ${tc.label}: unexpected diagnostics ${JSON.stringify(get(act, 'diagnostics'))}`,
+      );
+      const planJson = jsonDumps(plan);
+      for (const bad of tc.forbidden) {
+        assert.ok(
+          !planJson.includes(bad),
+          `plan ${tc.label}: leaked ${bad}`,
+        );
+      }
+      const outcome = mc.apply(confirm(plan));
+      assert.deepEqual(get(outcome, 'files_written'), [], `apply ${tc.label}`);
+      assert.equal(readFileSync(configPath, 'utf8'), before);
+    }
+
+    // 2. Selected-source endpoint from another client (claude) carrying a secret or ref
+    const sourceCases: Array<{
+      label: string;
+      claudeUrl: string;
+      forbidden: string[];
+    }> = [
+      {
+        label: 'claude source with query-string secret',
+        claudeUrl: `https://memory.example.test/mcp?token=${SENTINEL}`,
+        forbidden: [SENTINEL, '?token='],
+      },
+      {
+        label: 'claude source with env ref in URL',
+        claudeUrl: 'https://memory.example.test/${SOURCE_TOKEN}',
+        forbidden: ['${SOURCE_TOKEN}', '${'],
+      },
+    ];
+
+    for (const sc of sourceCases) {
+      const srcRoot = join(temp, sc.label.replaceAll(' ', '_'));
+      cpSync(APPLY_PROJECT, srcRoot, { recursive: true });
+      const agPath = join(srcRoot, '.agents', 'mcp_config.json');
+      const agDoc = readJsonText(readFileSync(agPath, 'utf8'));
+      delete (agDoc['mcpServers'] as Record<string, unknown>)['mem'];
+      writeFileSync(agPath, `${JSON.stringify(agDoc, null, 2)}\n`);
+      const agBefore = readFileSync(agPath, 'utf8');
+
+      const claudePath = join(srcRoot, '.mcp.json');
+      const claudeDoc = readJsonText(readFileSync(claudePath, 'utf8'));
+      (claudeDoc['mcpServers'] as Record<string, unknown>)['secret_mem'] = {
+        type: 'http',
+        url: sc.claudeUrl,
+      };
+      writeFileSync(claudePath, `${JSON.stringify(claudeDoc, null, 2)}\n`);
+
+      const plan = mc.buildPlan(
+        srcRoot,
+        { memory: { antigravity: 'mem' } },
+        {
+          memory: {
+            clients: ['antigravity'],
+            source: { client: 'claude', registration: 'secret_mem' },
+          },
+        },
+        {
+          clients: ['claude', 'antigravity'],
+          machine: APPLY_MACHINE as unknown as Dict,
+        },
+      );
+      const act = action(plan, 'memory', 'antigravity');
+      assert.equal(get(act, 'action'), 'unsupported', sc.label);
+      assert.equal(get(act, 'entry'), null, sc.label);
+      assert.deepEqual(keysOf(get(plan, 'files')), [], sc.label);
+      const serialized = jsonDumps(plan);
+      for (const bad of sc.forbidden) {
+        assert.ok(!serialized.includes(bad), `${sc.label}: leaked ${bad}`);
+      }
+      const outcome = mc.apply(confirm(plan));
+      assert.deepEqual(get(outcome, 'files_written'), [], sc.label);
+      assert.equal(readFileSync(agPath, 'utf8'), agBefore);
+    }
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('test_antigravity_existing_unsafe_entries_gated_and_handcrafted_apply_refused', () => {
+  const temp = makeTemp();
+  try {
+    const sha256Of = (filePath: string): string =>
+      `sha256:${createHash('sha256').update(readFileSync(filePath)).digest('hex')}`;
+
+    // 1. Existing enabled matching stdio entry with a reference
+    const enabledStdioRoot = join(temp, 'enabled-stdio');
+    cpSync(APPLY_PROJECT, enabledStdioRoot, { recursive: true });
+    const enabledStdioPath = join(
+      enabledStdioRoot,
+      '.agents',
+      'mcp_config.json',
+    );
+    const enabledStdioDoc = readJsonText(readFileSync(enabledStdioPath, 'utf8'));
+    (enabledStdioDoc['mcpServers'] as Record<string, unknown>)['lint'] = {
+      command: 'lint-mcp',
+      args: ['--endpoint', '${LINT_BACKEND_TOKEN}'],
+    };
+    writeFileSync(
+      enabledStdioPath,
+      `${JSON.stringify(enabledStdioDoc, null, 2)}\n`,
+    );
+    const enabledStdioBefore = readFileSync(enabledStdioPath, 'utf8');
+    const matchingStdioMachine = {
+      ...APPLY_MACHINE,
+      local_config_refs: {
+        ...APPLY_MACHINE.local_config_refs,
+        LINT_MCP_COMMAND: {
+          command: ['lint-mcp', '--endpoint', '${LINT_BACKEND_TOKEN}'],
+        },
+      },
+    } as unknown as Dict;
+
+    const enabledStdioReport = mc.assess(enabledStdioRoot, {
+      clients: ['antigravity'],
+      machine: matchingStdioMachine,
+      mapping: { lint: { antigravity: 'lint' } },
+    });
+    assert.equal(
+      get(result(enabledStdioReport, 'lint', 'antigravity'), 'state'),
+      'unsupported',
+    );
+    assert.ok(!jsonDumps(enabledStdioReport).includes('${'));
+
+    const enabledStdioPlan = mc.buildPlan(
+      enabledStdioRoot,
+      { lint: { antigravity: 'lint' } },
+      ['lint'],
+      { clients: ['antigravity'], machine: matchingStdioMachine },
+    );
+    const enabledStdioAct = action(enabledStdioPlan, 'lint', 'antigravity');
+    assert.equal(get(enabledStdioAct, 'action'), 'unsupported');
+    assert.equal(get(enabledStdioAct, 'entry'), null);
+    assert.equal(get(enabledStdioAct, 'resolution'), null);
+    assert.deepEqual(keysOf(get(enabledStdioPlan, 'files')), []);
+    assert.ok(!jsonDumps(enabledStdioPlan).includes('${'));
+    assert.deepEqual(
+      get(mc.apply(confirm(enabledStdioPlan)), 'files_written'),
+      [],
+    );
+    assert.equal(readFileSync(enabledStdioPath, 'utf8'), enabledStdioBefore);
+
+    // 2. Existing disabled stdio entry with a reference (even when machine command is safe!)
+    const disabledStdioRoot = join(temp, 'disabled-stdio');
+    cpSync(APPLY_PROJECT, disabledStdioRoot, { recursive: true });
+    const disabledStdioPath = join(
+      disabledStdioRoot,
+      '.agents',
+      'mcp_config.json',
+    );
+    const disabledStdioDoc = readJsonText(
+      readFileSync(disabledStdioPath, 'utf8'),
+    );
+    (disabledStdioDoc['mcpServers'] as Record<string, unknown>)['lint'] = {
+      command: 'lint-mcp',
+      args: ['--endpoint', '${LINT_BACKEND_TOKEN}'],
+      disabled: true,
+    };
+    writeFileSync(
+      disabledStdioPath,
+      `${JSON.stringify(disabledStdioDoc, null, 2)}\n`,
+    );
+    const disabledStdioBefore = readFileSync(disabledStdioPath, 'utf8');
+
+    const disabledStdioReport = mc.assess(disabledStdioRoot, {
+      clients: ['antigravity'],
+      machine: APPLY_MACHINE as unknown as Dict,
+      mapping: { lint: { antigravity: 'lint' } },
+    });
+    assert.equal(
+      get(result(disabledStdioReport, 'lint', 'antigravity'), 'state'),
+      'unsupported',
+    );
+    assert.ok(!jsonDumps(disabledStdioReport).includes('${'));
+
+    const disabledStdioPlan = mc.buildPlan(
+      disabledStdioRoot,
+      { lint: { antigravity: 'lint' } },
+      ['lint'],
+      { clients: ['antigravity'], machine: APPLY_MACHINE as unknown as Dict },
+    );
+    const disabledStdioAct = action(disabledStdioPlan, 'lint', 'antigravity');
+    assert.equal(get(disabledStdioAct, 'action'), 'unsupported');
+    assert.equal(get(disabledStdioAct, 'entry'), null);
+    assert.equal(get(disabledStdioAct, 'resolution'), null);
+    assert.deepEqual(keysOf(get(disabledStdioPlan, 'files')), []);
+    assert.ok(!jsonDumps(disabledStdioPlan).includes('${'));
+    assert.deepEqual(
+      get(mc.apply(confirm(disabledStdioPlan)), 'files_written'),
+      [],
+    );
+    assert.equal(readFileSync(disabledStdioPath, 'utf8'), disabledStdioBefore);
+
+    // 3. Existing remote entry with a query-string token (enabled and disabled)
+    for (const isDisabled of [false, true]) {
+      const remoteRoot = join(
+        temp,
+        isDisabled ? 'remote-query-disabled' : 'remote-query-enabled',
+      );
+      cpSync(APPLY_PROJECT, remoteRoot, { recursive: true });
+      const remotePath = join(remoteRoot, '.agents', 'mcp_config.json');
+      const remoteDoc = readJsonText(readFileSync(remotePath, 'utf8'));
+      const entryObj: Record<string, unknown> = {
+        serverUrl: `https://memory.example.test/mcp?token=${SENTINEL}`,
+      };
+      if (isDisabled) entryObj['disabled'] = true;
+      (remoteDoc['mcpServers'] as Record<string, unknown>)['mem'] = entryObj;
+      writeFileSync(remotePath, `${JSON.stringify(remoteDoc, null, 2)}\n`);
+      const remoteBefore = readFileSync(remotePath, 'utf8');
+
+      const remoteReport = mc.assess(remoteRoot, {
+        clients: ['antigravity'],
+        machine: APPLY_MACHINE as unknown as Dict,
+        mapping: { memory: { antigravity: 'mem' } },
+      });
+      assert.equal(
+        get(result(remoteReport, 'memory', 'antigravity'), 'state'),
+        'unsupported',
+      );
+      const remoteReportJson = jsonDumps(remoteReport);
+      assert.ok(!remoteReportJson.includes(SENTINEL));
+      assert.ok(!remoteReportJson.includes('?token='));
+
+      const remotePlan = mc.buildPlan(
+        remoteRoot,
+        { memory: { antigravity: 'mem' } },
+        ['memory'],
+        { clients: ['antigravity'], machine: APPLY_MACHINE as unknown as Dict },
+      );
+      const remoteAct = action(remotePlan, 'memory', 'antigravity');
+      assert.equal(get(remoteAct, 'action'), 'unsupported');
+      assert.equal(get(remoteAct, 'entry'), null);
+      assert.equal(get(remoteAct, 'resolution'), null);
+      assert.deepEqual(keysOf(get(remotePlan, 'files')), []);
+      const remotePlanJson = jsonDumps(remotePlan);
+      assert.ok(!remotePlanJson.includes(SENTINEL));
+      assert.ok(!remotePlanJson.includes('?token='));
+      assert.deepEqual(
+        get(mc.apply(confirm(remotePlan)), 'files_written'),
+        [],
+      );
+      assert.equal(readFileSync(remotePath, 'utf8'), remoteBefore);
+    }
+
+    // 4. Hand-crafted plan with 'reenable' resolution on unsafe entries is refused with zero writes
+    const handcraftedCases: Array<{
+      label: string;
+      root: string;
+      configPath: string;
+      service: string;
+      registration: string;
+      forbidden: string[];
+    }> = [
+      {
+        label: 'hand-crafted reenable on stdio ref entry',
+        root: disabledStdioRoot,
+        configPath: disabledStdioPath,
+        service: 'lint',
+        registration: 'lint',
+        forbidden: ['${LINT_BACKEND_TOKEN}', '${'],
+      },
+      {
+        label: 'hand-crafted reenable on remote query-token entry',
+        root: join(temp, 'remote-query-disabled'),
+        configPath: join(
+          temp,
+          'remote-query-disabled',
+          '.agents',
+          'mcp_config.json',
+        ),
+        service: 'memory',
+        registration: 'mem',
+        forbidden: [SENTINEL, '?token='],
+      },
+    ];
+
+    for (const hc of handcraftedCases) {
+      const before = readFileSync(hc.configPath, 'utf8');
+      const craftedPlan: Dict = new Map<string, unknown>([
+        ['kind', mc.PLAN_KIND],
+        ['version', mc.PLAN_VERSION],
+        ['root', hc.root],
+        ['environment', 'apply-machine'],
+        ['confirmed', true],
+        ['selections', [hc.service]],
+        ['clients', ['antigravity']],
+        ['manifest', new Map([['present', true]])],
+        [
+          'files',
+          new Map([
+            [
+              '.agents/mcp_config.json',
+              new Map<string, unknown>([
+                ['digest', sha256Of(hc.configPath)],
+                ['present', true],
+              ]),
+            ],
+          ]),
+        ],
+        [
+          'actions',
+          [
+            new Map<string, unknown>([
+              ['service', hc.service],
+              ['client', 'antigravity'],
+              ['registration', hc.registration],
+              ['action', 'conflict-needs-resolution'],
+              ['file', '.agents/mcp_config.json'],
+              ['entry', null],
+              ['approvals', []],
+              ['untranslated', []],
+              ['diagnostics', []],
+              ['prerequisites', []],
+              ['resolution', new Map([['kind', 'reenable']])],
+              ['applied', false],
+            ]),
+          ],
+        ],
+        ['diagnostics', []],
+        ['prerequisites', []],
+      ]);
+
+      assert.throws(
+        () => mc.apply(craftedPlan),
+        (err: unknown) => {
+          assert.ok(err instanceof ValueError, hc.label);
+          assert.match(err.message, /refusing to re-enable unsafe Antigravity/i);
+          for (const bad of hc.forbidden) {
+            assert.ok(
+              !err.message.includes(bad),
+              `${hc.label}: error leaked ${bad}`,
+            );
+          }
+          return true;
+        },
+      );
+      assert.equal(readFileSync(hc.configPath, 'utf8'), before, hc.label);
+    }
+
+    // 5. Hand-crafted plan with 'add' carrying an unsafe Antigravity entry is refused with zero writes
+    const craftedAddBefore = readFileSync(disabledStdioPath, 'utf8');
+    const craftedAddPlan: Dict = new Map<string, unknown>([
+      ['kind', mc.PLAN_KIND],
+      ['version', mc.PLAN_VERSION],
+      ['root', disabledStdioRoot],
+      ['environment', 'apply-machine'],
+      ['confirmed', true],
+      ['selections', ['oauth-docs']],
+      ['clients', ['antigravity']],
+      ['manifest', new Map([['present', true]])],
+      [
+        'files',
+        new Map([
+          [
+            '.agents/mcp_config.json',
+            new Map<string, unknown>([
+              ['digest', sha256Of(disabledStdioPath)],
+              ['present', true],
+            ]),
+          ],
+        ]),
+      ],
+      [
+        'actions',
+        [
+          new Map<string, unknown>([
+            ['service', 'oauth-docs'],
+            ['client', 'antigravity'],
+            ['registration', 'oauth-docs'],
+            ['action', 'add'],
+            ['file', '.agents/mcp_config.json'],
+            [
+              'entry',
+              new Map([
+                [
+                  'serverUrl',
+                  `https://oauth.example.test/mcp?token=${SENTINEL}`,
+                ],
+              ]),
+            ],
+            ['approvals', []],
+            ['untranslated', []],
+            ['diagnostics', []],
+            ['prerequisites', []],
+            ['resolution', null],
+            ['applied', false],
+          ]),
+        ],
+      ],
+      ['diagnostics', []],
+      ['prerequisites', []],
+    ]);
+    assert.throws(
+      () => mc.apply(craftedAddPlan),
+      (err: unknown) => {
+        assert.ok(err instanceof ValueError);
+        assert.match(err.message, /refusing to write unsafe Antigravity/i);
+        assert.ok(!err.message.includes(SENTINEL));
+        assert.ok(!err.message.includes('?token='));
+        return true;
+      },
+    );
+    assert.equal(readFileSync(disabledStdioPath, 'utf8'), craftedAddBefore);
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('test_antigravity_safety_policy_matrix', () => {
+  const MATRIX_SENTINEL = 'MATRIX_SECRET_SENTINEL_DO_NOT_EMIT';
+  const FIELDS = ['command', 'arg', 'env', 'url', 'header'] as const;
+  const KINDS = ['braced', 'bare', 'opencode', 'secret', 'literal'] as const;
+  const PATHS = [
+    'new-add',
+    'enabled-reuse',
+    'disabled-reenable',
+    'apply-add',
+    'apply-replace',
+    'apply-reenable',
+  ] as const;
+
+  type Field = (typeof FIELDS)[number];
+  type Kind = (typeof KINDS)[number];
+  type Path = (typeof PATHS)[number];
+
+  interface Payload {
+    value: string;
+    forbidden: string[];
+    expectedName?: string;
+  }
+
+  const payloadFor = (field: Field, kind: Kind): Payload => {
+    if (field === 'command') {
+      if (kind === 'braced') {
+        return {
+          value: '${BIN_DIR}/lint-mcp',
+          forbidden: ['${BIN_DIR}', '${BIN_DIR}/lint-mcp'],
+          expectedName: 'BIN_DIR',
+        };
+      }
+      if (kind === 'bare') {
+        return {
+          value: '$BIN_DIR/lint-mcp',
+          forbidden: ['$BIN_DIR', '$BIN_DIR/lint-mcp'],
+          expectedName: 'BIN_DIR',
+        };
+      }
+      if (kind === 'opencode') {
+        return {
+          value: '{env:BIN_DIR}/lint-mcp',
+          forbidden: ['{env:BIN_DIR}', '{env:BIN_DIR}/lint-mcp'],
+          expectedName: 'BIN_DIR',
+        };
+      }
+      return {
+        value: MATRIX_SENTINEL,
+        forbidden: [MATRIX_SENTINEL],
+      };
+    }
+    if (field === 'arg') {
+      if (kind === 'braced') {
+        return {
+          value: '${LINT_BACKEND_TOKEN}',
+          forbidden: ['${LINT_BACKEND_TOKEN}'],
+          expectedName: 'LINT_BACKEND_TOKEN',
+        };
+      }
+      if (kind === 'bare') {
+        return {
+          value: '$LINT_BACKEND_TOKEN',
+          forbidden: ['$LINT_BACKEND_TOKEN'],
+          expectedName: 'LINT_BACKEND_TOKEN',
+        };
+      }
+      if (kind === 'opencode') {
+        return {
+          value: '{env:LINT_BACKEND_TOKEN}',
+          forbidden: ['{env:LINT_BACKEND_TOKEN}'],
+          expectedName: 'LINT_BACKEND_TOKEN',
+        };
+      }
+      return {
+        value: MATRIX_SENTINEL,
+        forbidden: [MATRIX_SENTINEL],
+      };
+    }
+    if (field === 'env') {
+      if (kind === 'braced') {
+        return {
+          value: '${LINT_BACKEND_TOKEN}',
+          forbidden: ['${LINT_BACKEND_TOKEN}'],
+          expectedName: 'LINT_BACKEND_TOKEN',
+        };
+      }
+      if (kind === 'bare') {
+        return {
+          value: '$LINT_BACKEND_TOKEN',
+          forbidden: ['$LINT_BACKEND_TOKEN'],
+          expectedName: 'LINT_BACKEND_TOKEN',
+        };
+      }
+      if (kind === 'opencode') {
+        return {
+          value: '{env:LINT_BACKEND_TOKEN}',
+          forbidden: ['{env:LINT_BACKEND_TOKEN}'],
+          expectedName: 'LINT_BACKEND_TOKEN',
+        };
+      }
+      if (kind === 'secret') {
+        return {
+          value: MATRIX_SENTINEL,
+          forbidden: [MATRIX_SENTINEL],
+          expectedName: 'LINT_BACKEND_TOKEN',
+        };
+      }
+      return {
+        value: 'literal-env-val-do-not-emit',
+        forbidden: ['literal-env-val-do-not-emit'],
+        expectedName: 'LINT_BACKEND_TOKEN',
+      };
+    }
+    if (field === 'url') {
+      if (kind === 'braced') {
+        return {
+          value: 'https://memory.example.test/${MEM_TOKEN}',
+          forbidden: ['${MEM_TOKEN}', '${'],
+          expectedName: 'MEM_TOKEN',
+        };
+      }
+      if (kind === 'bare') {
+        return {
+          value: 'https://memory.example.test/$MEM_TOKEN',
+          forbidden: ['$MEM_TOKEN'],
+          expectedName: 'MEM_TOKEN',
+        };
+      }
+      if (kind === 'opencode') {
+        return {
+          value: 'https://memory.example.test/{env:MEM_TOKEN}',
+          forbidden: ['{env:MEM_TOKEN}'],
+          expectedName: 'MEM_TOKEN',
+        };
+      }
+      return {
+        value: `https://${MATRIX_SENTINEL}.example.test/mcp`,
+        forbidden: [MATRIX_SENTINEL, MATRIX_SENTINEL.toLowerCase()],
+      };
+    }
+    // field === 'header'
+    if (kind === 'braced') {
+      return {
+        value: 'Bearer ${CUSTOM_TOKEN}',
+        forbidden: ['${CUSTOM_TOKEN}', '${'],
+        expectedName: 'CUSTOM_TOKEN',
+      };
+    }
+    if (kind === 'bare') {
+      return {
+        value: 'Bearer $CUSTOM_TOKEN',
+        forbidden: ['$CUSTOM_TOKEN'],
+        expectedName: 'CUSTOM_TOKEN',
+      };
+    }
+    if (kind === 'opencode') {
+      return {
+        value: 'Bearer {env:CUSTOM_TOKEN}',
+        forbidden: ['{env:CUSTOM_TOKEN}'],
+        expectedName: 'CUSTOM_TOKEN',
+      };
+    }
+    if (kind === 'secret') {
+      return {
+        value: MATRIX_SENTINEL,
+        forbidden: [MATRIX_SENTINEL],
+        expectedName: 'X-Custom-Header',
+      };
+    }
+    return {
+      value: 'literal-hdr-val-do-not-emit',
+      forbidden: ['literal-hdr-val-do-not-emit'],
+      expectedName: 'X-Custom-Header',
+    };
+  };
+
+  const entryObjectFor = (
+    field: Field,
+    value: string,
+    disabled = false,
+  ): Record<string, unknown> => {
+    const obj: Record<string, unknown> =
+      field === 'command'
+        ? { command: value, args: ['--stdio'] }
+        : field === 'arg'
+          ? { command: 'lint-mcp', args: [value] }
+          : field === 'env'
+            ? {
+                command: 'lint-mcp',
+                args: ['--stdio'],
+                env: { LINT_BACKEND_TOKEN: value },
+              }
+            : field === 'url'
+              ? { serverUrl: value }
+              : {
+                  serverUrl: 'https://memory.example.test/mcp',
+                  headers: { 'X-Custom-Header': value },
+                };
+    if (disabled) obj['disabled'] = true;
+    return obj;
+  };
+
+  const entryMapFor = (obj: Record<string, unknown>): Dict => {
+    const out = new Map<string, unknown>();
+    for (const [k, v] of Object.entries(obj)) {
+      if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+        out.set(k, new Map(Object.entries(v as Record<string, unknown>)));
+      } else {
+        out.set(k, v);
+      }
+    }
+    return out;
+  };
+
+  const assertRedacted = (
+    text: string,
+    forbidden: string[],
+    label: string,
+  ): void => {
+    for (const bad of [...forbidden, SENTINEL]) {
+      assert.ok(!text.includes(bad), `${label}: leaked ${JSON.stringify(bad)}`);
+    }
+  };
+
+  const sha256Of = (filePath: string): string =>
+    `sha256:${createHash('sha256').update(readFileSync(filePath)).digest('hex')}`;
+
+  const temp = makeTemp();
+  let executedCount = 0;
+  let skippedCount = 0;
+  try {
+    for (const field of FIELDS) {
+      for (const kind of KINDS) {
+        for (const path of PATHS) {
+          const cellLabel = `${field} x ${kind} x ${path}`;
+
+          // Skip: literal non-reference values are only applicable to env and
+          // header fields (a plain non-reference command/arg/url is ordinary
+          // valid config, not a literal credential/env/header case).
+          if (
+            kind === 'literal' &&
+            (field === 'command' || field === 'arg' || field === 'url')
+          ) {
+            skippedCount += 1;
+            continue;
+          }
+
+          // Skip: new-add with env value is impossible via buildPlan because
+          // manifests/machine descriptors never supply env values and
+          // Antigravity translation never writes an env block (covered by
+          // apply-add and apply-replace).
+          if (field === 'env' && path === 'new-add') {
+            skippedCount += 1;
+            continue;
+          }
+
+          executedCount += 1;
+          const isStdio =
+            field === 'command' || field === 'arg' || field === 'env';
+          const serviceId = isStdio ? 'lint' : 'memory';
+          const regName = isStdio ? 'lint' : 'mem';
+          const payload = payloadFor(field, kind);
+
+          const cellRoot = join(temp, `${field}_${kind}_${path}`);
+          cpSync(APPLY_PROJECT, cellRoot, { recursive: true });
+          const agPath = join(cellRoot, '.agents', 'mcp_config.json');
+          const agDoc = readJsonText(readFileSync(agPath, 'utf8'));
+          const servers = agDoc['mcpServers'] as Record<string, unknown>;
+          delete servers[regName];
+
+          const baseMachine = {
+            ...APPLY_MACHINE,
+            secret_values: new Set([MATRIX_SENTINEL, SENTINEL]),
+            local_config_refs: {
+              ...APPLY_MACHINE.local_config_refs,
+            },
+          };
+
+          if (path === 'new-add') {
+            writeFileSync(agPath, `${JSON.stringify(agDoc, null, 2)}\n`);
+            const before = readFileSync(agPath, 'utf8');
+
+            if (field === 'header') {
+              // Exercise header on new-add via a selected Claude source entry
+              // carrying the header value.
+              const claudePath = join(cellRoot, '.mcp.json');
+              const claudeDoc = readJsonText(readFileSync(claudePath, 'utf8'));
+              (claudeDoc['mcpServers'] as Record<string, unknown>)['src_mem'] =
+                {
+                  type: 'http',
+                  url: 'https://memory.example.test/mcp',
+                  headers: { 'X-Custom-Header': payload.value },
+                };
+              writeFileSync(
+                claudePath,
+                `${JSON.stringify(claudeDoc, null, 2)}\n`,
+              );
+
+              const plan = mc.buildPlan(
+                cellRoot,
+                { [serviceId]: { antigravity: regName } },
+                {
+                  [serviceId]: {
+                    clients: ['antigravity'],
+                    source: { client: 'claude', registration: 'src_mem' },
+                  },
+                },
+                {
+                  clients: ['claude', 'antigravity'],
+                  machine: baseMachine as unknown as Dict,
+                },
+              );
+              const act = action(plan, serviceId, 'antigravity');
+              assert.equal(get(act, 'action'), 'unsupported', cellLabel);
+              assert.equal(get(act, 'entry'), null, cellLabel);
+              assert.deepEqual(keysOf(get(plan, 'files')), [], cellLabel);
+              assertRedacted(
+                jsonDumps(plan),
+                payload.forbidden,
+                `${cellLabel} plan`,
+              );
+              const outcome = mc.apply(confirm(plan));
+              assert.deepEqual(get(outcome, 'files_written'), [], cellLabel);
+              assertRedacted(
+                jsonDumps(outcome),
+                payload.forbidden,
+                `${cellLabel} apply`,
+              );
+              assert.equal(readFileSync(agPath, 'utf8'), before, cellLabel);
+              continue;
+            }
+
+            const machine = {
+              ...baseMachine,
+              local_config_refs: {
+                ...baseMachine.local_config_refs,
+                ...(field === 'command'
+                  ? { LINT_MCP_COMMAND: { command: [payload.value, '--stdio'] } }
+                  : field === 'arg'
+                    ? { LINT_MCP_COMMAND: { command: ['lint-mcp', payload.value] } }
+                    : {
+                        'machine-local memory profile': {
+                          endpoint: payload.value,
+                        },
+                      }),
+              },
+            } as unknown as Dict;
+
+            const report = mc.assess(cellRoot, {
+              clients: ['antigravity'],
+              machine,
+              mapping: { [serviceId]: { antigravity: regName } },
+            });
+            assert.equal(
+              get(result(report, serviceId, 'antigravity'), 'state'),
+              'unsupported',
+              `${cellLabel} assess`,
+            );
+            assertRedacted(
+              jsonDumps(report),
+              payload.forbidden,
+              `${cellLabel} assess`,
+            );
+
+            const plan = mc.buildPlan(
+              cellRoot,
+              { [serviceId]: { antigravity: regName } },
+              [serviceId],
+              { clients: ['antigravity'], machine },
+            );
+            const act = action(plan, serviceId, 'antigravity');
+            assert.equal(get(act, 'action'), 'unsupported', `${cellLabel} plan`);
+            assert.equal(get(act, 'entry'), null, cellLabel);
+            assert.deepEqual(keysOf(get(plan, 'files')), [], cellLabel);
+            assertRedacted(
+              jsonDumps(plan),
+              payload.forbidden,
+              `${cellLabel} plan`,
+            );
+
+            const outcome = mc.apply(confirm(plan));
+            assert.deepEqual(get(outcome, 'files_written'), [], cellLabel);
+            assertRedacted(
+              jsonDumps(outcome),
+              payload.forbidden,
+              `${cellLabel} apply`,
+            );
+            assert.equal(readFileSync(agPath, 'utf8'), before, cellLabel);
+            continue;
+          }
+
+          if (path === 'enabled-reuse') {
+            servers[regName] = entryObjectFor(field, payload.value, false);
+            writeFileSync(agPath, `${JSON.stringify(agDoc, null, 2)}\n`);
+            const before = readFileSync(agPath, 'utf8');
+
+            // Make machine match command/arg/url so the existing enabled entry
+            // would be a matching reuse if not blocked by the safety gate.
+            const machine = {
+              ...baseMachine,
+              local_config_refs: {
+                ...baseMachine.local_config_refs,
+                ...(field === 'command'
+                  ? { LINT_MCP_COMMAND: { command: [payload.value, '--stdio'] } }
+                  : field === 'arg'
+                    ? { LINT_MCP_COMMAND: { command: ['lint-mcp', payload.value] } }
+                    : field === 'url'
+                      ? {
+                          'machine-local memory profile': {
+                            endpoint: payload.value,
+                          },
+                        }
+                      : {}),
+              },
+            } as unknown as Dict;
+
+            const allowReuse =
+              (field === 'env' || field === 'header') &&
+              (kind === 'secret' || kind === 'literal');
+
+            const report = mc.assess(cellRoot, {
+              clients: ['antigravity'],
+              machine,
+              mapping: { [serviceId]: { antigravity: regName } },
+            });
+            const res = result(report, serviceId, 'antigravity');
+            assert.equal(
+              get(res, 'state'),
+              allowReuse ? 'auth-unverified' : 'unsupported',
+              `${cellLabel} assess`,
+            );
+            if (allowReuse) {
+              const lims = get(res, 'limitations') as string[];
+              assert.ok(
+                lims.some((line) =>
+                  line.includes(payload.expectedName as string),
+                ),
+                `${cellLabel} assess: expected redacted name note in ${JSON.stringify(lims)}`,
+              );
+            }
+            if (field === 'command') {
+              const snapEntry = get(
+                get(get(get(report, 'clients'), 'antigravity'), 'entries'),
+                regName,
+              );
+              assert.equal(
+                get(snapEntry, 'command'),
+                null,
+                `${cellLabel}: snapshot command must be redacted`,
+              );
+            }
+            if (field === 'url') {
+              const snapEntry = get(
+                get(get(get(report, 'clients'), 'antigravity'), 'entries'),
+                regName,
+              );
+              assert.equal(
+                get(snapEntry, 'url'),
+                null,
+                `${cellLabel}: snapshot url must be redacted`,
+              );
+            }
+            assertRedacted(
+              jsonDumps(report),
+              payload.forbidden,
+              `${cellLabel} assess`,
+            );
+
+            const plan = mc.buildPlan(
+              cellRoot,
+              { [serviceId]: { antigravity: regName } },
+              [serviceId],
+              { clients: ['antigravity'], machine },
+            );
+            const act = action(plan, serviceId, 'antigravity');
+            assert.equal(
+              get(act, 'action'),
+              allowReuse ? 'reuse' : 'unsupported',
+              `${cellLabel} plan`,
+            );
+            assert.equal(get(act, 'entry'), null, cellLabel);
+            assert.deepEqual(keysOf(get(plan, 'files')), [], cellLabel);
+            if (allowReuse) {
+              const prereqs = get(act, 'prerequisites') as string[];
+              assert.ok(
+                prereqs.some(
+                  (line) =>
+                    line.includes('auth-unverified') &&
+                    line.includes(payload.expectedName as string),
+                ),
+                `${cellLabel} plan: expected auth-unverified name note in ${JSON.stringify(prereqs)}`,
+              );
+            }
+            assertRedacted(
+              jsonDumps(plan),
+              payload.forbidden,
+              `${cellLabel} plan`,
+            );
+
+            const outcome = mc.apply(confirm(plan));
+            assert.deepEqual(get(outcome, 'files_written'), [], cellLabel);
+            assertRedacted(
+              jsonDumps(outcome),
+              payload.forbidden,
+              `${cellLabel} apply`,
+            );
+            assert.equal(readFileSync(agPath, 'utf8'), before, cellLabel);
+            continue;
+          }
+
+          if (path === 'disabled-reenable') {
+            servers[regName] = entryObjectFor(field, payload.value, true);
+            writeFileSync(agPath, `${JSON.stringify(agDoc, null, 2)}\n`);
+            const before = readFileSync(agPath, 'utf8');
+            const machine = baseMachine as unknown as Dict;
+
+            const report = mc.assess(cellRoot, {
+              clients: ['antigravity'],
+              machine,
+              mapping: { [serviceId]: { antigravity: regName } },
+            });
+            assert.equal(
+              get(result(report, serviceId, 'antigravity'), 'state'),
+              'unsupported',
+              `${cellLabel} assess`,
+            );
+            assertRedacted(
+              jsonDumps(report),
+              payload.forbidden,
+              `${cellLabel} assess`,
+            );
+
+            const plan = mc.buildPlan(
+              cellRoot,
+              { [serviceId]: { antigravity: regName } },
+              [serviceId],
+              { clients: ['antigravity'], machine },
+            );
+            const act = action(plan, serviceId, 'antigravity');
+            assert.equal(get(act, 'action'), 'unsupported', `${cellLabel} plan`);
+            assert.equal(get(act, 'entry'), null, cellLabel);
+            assert.deepEqual(keysOf(get(plan, 'files')), [], cellLabel);
+            assertRedacted(
+              jsonDumps(plan),
+              payload.forbidden,
+              `${cellLabel} plan`,
+            );
+
+            const outcome = mc.apply(confirm(plan));
+            assert.deepEqual(get(outcome, 'files_written'), [], cellLabel);
+            assertRedacted(
+              jsonDumps(outcome),
+              payload.forbidden,
+              `${cellLabel} apply`,
+            );
+            assert.equal(readFileSync(agPath, 'utf8'), before, cellLabel);
+            continue;
+          }
+
+          // Hand-crafted confirmed apply paths: apply-add, apply-replace, apply-reenable
+          if (path === 'apply-replace') {
+            servers[regName] = isStdio
+              ? { command: 'lint-mcp', args: ['--old'] }
+              : { serverUrl: 'https://elsewhere.example.test/mcp' };
+          } else if (path === 'apply-reenable') {
+            servers[regName] = entryObjectFor(field, payload.value, true);
+          }
+          writeFileSync(agPath, `${JSON.stringify(agDoc, null, 2)}\n`);
+          const before = readFileSync(agPath, 'utf8');
+
+          const craftedAction = new Map<string, unknown>([
+            ['service', serviceId],
+            ['client', 'antigravity'],
+            ['registration', regName],
+            [
+              'action',
+              path === 'apply-add' ? 'add' : 'conflict-needs-resolution',
+            ],
+            ['file', '.agents/mcp_config.json'],
+            [
+              'entry',
+              path === 'apply-reenable'
+                ? null
+                : entryMapFor(entryObjectFor(field, payload.value, false)),
+            ],
+            ['approvals', []],
+            ['untranslated', []],
+            ['diagnostics', []],
+            ['prerequisites', []],
+            [
+              'resolution',
+              path === 'apply-add'
+                ? null
+                : new Map([
+                    ['kind', path === 'apply-replace' ? 'replace' : 'reenable'],
+                  ]),
+            ],
+            ['applied', false],
+          ]);
+
+          const craftedPlan: Dict = new Map<string, unknown>([
+            ['kind', mc.PLAN_KIND],
+            ['version', mc.PLAN_VERSION],
+            ['root', cellRoot],
+            ['environment', 'apply-machine'],
+            ['confirmed', true],
+            ['selections', [serviceId]],
+            ['clients', ['antigravity']],
+            ['manifest', new Map([['present', true]])],
+            [
+              'files',
+              new Map([
+                [
+                  '.agents/mcp_config.json',
+                  new Map<string, unknown>([
+                    ['digest', sha256Of(agPath)],
+                    ['present', true],
+                  ]),
+                ],
+              ]),
+            ],
+            ['actions', [craftedAction]],
+            ['diagnostics', []],
+            ['prerequisites', []],
+          ]);
+
+          const applyOpts =
+            kind === 'secret'
+              ? { machine: baseMachine as unknown as Dict }
+              : undefined;
+          assert.throws(
+            () => mc.apply(craftedPlan, undefined, applyOpts),
+            (err: unknown) => {
+              assert.ok(err instanceof ValueError, cellLabel);
+              assert.match(
+                err.message,
+                path === 'apply-reenable'
+                  ? /refusing to re-enable unsafe Antigravity/i
+                  : /refusing to write unsafe Antigravity/i,
+                cellLabel,
+              );
+              assertRedacted(
+                err.message,
+                payload.forbidden,
+                `${cellLabel} error`,
+              );
+              return true;
+            },
+          );
+          assert.equal(readFileSync(agPath, 'utf8'), before, cellLabel);
+        }
+      }
+    }
+
+    assert.equal(executedCount, 127);
+    assert.equal(skippedCount, 23);
+    assert.equal(
+      executedCount + skippedCount,
+      FIELDS.length * KINDS.length * PATHS.length,
+    );
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
 });
