@@ -290,7 +290,7 @@ Claude Code reads project skills only from `.claude/skills`. Add `--claude-skill
 
 OpenCode discovers the same `.agents/skills` installation. Add `--codex-agents` if you want the Codex profiles. See [OpenCode setup](docs/opencode.md) for
 native MCP registration, session reload, discovery checks and project routing.
-Codex MCP setup is in [Codex setup](docs/codex.md). Devin runs through T3 Code's ACP integration; see [Devin setup](docs/devin.md). Grok delegates run through T3's provider integration; see [Grok setup](docs/grok.md). The Codex, Claude Code, OpenCode, Devin and Grok guides follow the
+Codex MCP setup is in [Codex setup](docs/codex.md). Devin runs through T3 Code's ACP integration; see [Devin setup](docs/devin.md). Grok delegates run through T3's provider integration; see [Grok setup](docs/grok.md). Antigravity Gemini delegates run through T3's Antigravity ACP integration; see [Antigravity setup](docs/antigravity.md). The Codex, Claude Code, OpenCode, Devin, Grok and Antigravity guides follow the
 shared [connection reference](.agents/skills/setup-basic-memory/references/client-connection.md).
 
 ### 2. Optionally configure native memory
