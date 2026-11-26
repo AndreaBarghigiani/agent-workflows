@@ -472,10 +472,17 @@ function splitlinesKeepends(text: string): string[] {
 // --- Module constants ------------------------------------------------------------
 
 export const CLIENTS = ['claude', 'codex', 'opencode'] as const;
+export const SUPPORTED_CLIENTS = [
+  'claude',
+  'codex',
+  'opencode',
+  'antigravity',
+] as const;
 export const CLIENT_PATHS: Record<string, string> = {
   claude: '.mcp.json',
   codex: '.codex/config.toml',
   opencode: 'opencode.json',
+  antigravity: '.agents/mcp_config.json',
 };
 export const CLAUDE_SETTINGS = '.claude/settings.local.json';
 
@@ -528,8 +535,33 @@ const OPENCODE_ENTRY_KEYS = new Set([
   'disabled',
   'timeout',
 ]);
+const ANTIGRAVITY_ENTRY_KEYS = new Set([
+  'command',
+  'args',
+  'env',
+  'cwd',
+  'serverUrl',
+  'url',
+  'headers',
+  'disabled',
+  'enabledTools',
+  'disabledTools',
+  'tools',
+  'timeoutSeconds',
+  'authProviderType',
+  'oauth',
+]);
 const CLAUDE_ENV_TOKEN = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 const OPENCODE_ENV_TOKEN = /\{env:([A-Za-z_][A-Za-z0-9_]*)\}/g;
+const ANTIGRAVITY_UNEXPANDED_REF =
+  /\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*|\{env:[A-Za-z_][A-Za-z0-9_]*\}/;
+const ANTIGRAVITY_UNEXPANDED_REF_CAPTURE =
+  /\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)|\{env:([A-Za-z_][A-Za-z0-9_]*)\}/g;
+const ANTIGRAVITY_REMOTE_AUTH_UNSUPPORTED =
+  "Antigravity's workspace mcp_config.json does not expand environment" +
+  ' references (verified with Antigravity 1.5.18); a bearer credential' +
+  ' would have to be written as a literal value, which this tooling' +
+  ' never does';
 // Registration names become approval grants (mcp__<name>) and client
 // configuration keys; anything outside this shape (wildcards, spaces,
 // dots, separators) is refused at mapping input, plan build and plan
@@ -656,6 +688,8 @@ export interface InspectEntry {
   inline_secrets: number;
   notes: string[];
   layers: string[];
+  env_values?: Map<string, unknown>;
+  header_values?: Map<string, unknown>;
 }
 
 export interface OpencodeAux {
@@ -1141,6 +1175,197 @@ function opencodeEntryInspect(
   return entry;
 }
 
+function antigravityEntries(
+  doc: unknown,
+): [Map<string, InspectEntry>, string[]] {
+  const entries = new Map<string, InspectEntry>();
+  const diagnostics: string[] = [];
+  if (!isDict(doc)) return [entries, ['top-level JSON is not an object']];
+  const servers = dictGetOr(doc, 'mcpServers', {});
+  if (!isDict(servers)) {
+    if (dictHas(doc, 'mcpServers')) {
+      diagnostics.push("'mcpServers' is not an object");
+    }
+    return [entries, diagnostics];
+  }
+  for (const [name, raw] of dictItems(servers)) {
+    try {
+      entries.set(name, antigravityEntryInspect(name, raw));
+    } catch (error) {
+      entries.set(
+        name,
+        inspectUninspectable(inspectEntry(name, 'project'), error),
+      );
+    }
+  }
+  return [entries, diagnostics];
+}
+
+function antigravityEntryInspect(name: string, raw: unknown): InspectEntry {
+  const entry = inspectEntry(name, 'project');
+  if (!isDict(raw)) {
+    entry.inspection = 'unknown';
+    entry.notes.push('entry is not an object');
+    return entry;
+  }
+  const hasHttpUrl = dictHas(raw, 'httpUrl');
+  const extra = pySortedStrings(
+    dictKeys(raw).filter(
+      (key) => !ANTIGRAVITY_ENTRY_KEYS.has(key) && key !== 'httpUrl',
+    ),
+  );
+  if (extra.length) {
+    entry.notes.push(`unrecognized fields: ${extra.join(', ')}`);
+  }
+  if (hasHttpUrl) {
+    entry.inspection = 'unsupported';
+    entry.notes.push(
+      "'httpUrl' is not supported by Antigravity; only Streamable HTTP via" +
+        " 'serverUrl' (or alias 'url') is supported",
+    );
+  }
+  const hasServerUrl = dictHas(raw, 'serverUrl');
+  const hasUrl = dictHas(raw, 'url');
+  const command = dictGet(raw, 'command');
+  if (hasServerUrl || hasUrl) {
+    entry.transport = 'remote';
+    if (hasServerUrl && hasUrl) {
+      entry.notes.push(
+        "entry sets both 'serverUrl' and 'url'; 'serverUrl' takes precedence",
+      );
+    }
+    const chosenField = hasServerUrl ? 'serverUrl' : 'url';
+    const chosenUrl = dictGet(raw, chosenField);
+    if (typeof chosenUrl !== 'string' || !chosenUrl) {
+      inspectMalformed(entry, `remote entry without a string '${chosenField}'`);
+    } else {
+      checkUrl(entry, chosenUrl);
+    }
+    if (command !== undefined && command !== null) {
+      entry.notes.push(
+        `entry sets both '${chosenField}' and 'command'; Antigravity treats` +
+          ' one entry as one transport',
+      );
+    }
+    const headers = dictGetOr(raw, 'headers', {});
+    if (isDict(headers)) {
+      const refLikeHeaders: string[] = [];
+      const headerValues = new Map<string, unknown>();
+      for (const [header, value] of dictItems(headers)) {
+        entry.header_names.add(header);
+        headerValues.set(header, value);
+        entry.inline_secrets += 1;
+        if (
+          typeof value === 'string' &&
+          ANTIGRAVITY_UNEXPANDED_REF.test(value)
+        ) {
+          refLikeHeaders.push(header);
+        }
+      }
+      if (headerValues.size) entry.header_values = headerValues;
+      if (entry.header_names.size) {
+        entry.notes.push(
+          `literal header value(s) present: ${pySortedStrings(entry.header_names).join(', ')};` +
+            ' Antigravity does not interpolate references',
+        );
+      }
+      if (refLikeHeaders.length) {
+        entry.notes.push(
+          `header(s) ${pySortedStrings(refLikeHeaders).join(', ')} contain` +
+            ' reference-like syntax that Antigravity passes literally' +
+            ' (not expanded)',
+        );
+      }
+    } else if (dictHas(raw, 'headers')) {
+      inspectMalformed(entry, "'headers' is not an object");
+    }
+    if (dictHas(raw, 'env')) {
+      const hybridEnv = dictGet(raw, 'env');
+      if (isDict(hybridEnv)) {
+        const envValues = new Map<string, unknown>();
+        for (const [envKey, value] of dictItems(hybridEnv)) {
+          entry.env_names.add(envKey);
+          envValues.set(envKey, value);
+          entry.inline_secrets += 1;
+        }
+        if (envValues.size) entry.env_values = envValues;
+      } else {
+        inspectMalformed(entry, "'env' is not an object");
+      }
+    }
+  } else if (typeof command === 'string' && command) {
+    entry.transport = 'stdio';
+    entry.command = argsOf([command], dictGetOr(raw, 'args', []), entry);
+    const env = dictGetOr(raw, 'env', {});
+    if (isDict(env)) {
+      entry.env_names = new Set(dictKeys(env));
+      const refLikeEnv: string[] = [];
+      const envValues = new Map<string, unknown>();
+      for (const [envKey, value] of dictItems(env)) {
+        envValues.set(envKey, value);
+        entry.inline_secrets += 1;
+        if (
+          typeof value === 'string' &&
+          ANTIGRAVITY_UNEXPANDED_REF.test(value)
+        ) {
+          refLikeEnv.push(envKey);
+        }
+      }
+      if (envValues.size) entry.env_values = envValues;
+      if (refLikeEnv.length) {
+        entry.notes.push(
+          `env variable(s) ${pySortedStrings(refLikeEnv).join(', ')} contain` +
+            ' reference-like syntax that Antigravity passes literally' +
+            ' (not expanded)',
+        );
+      }
+    } else if (dictHas(raw, 'env')) {
+      inspectMalformed(entry, "'env' is not an object");
+    }
+    if (dictHas(raw, 'headers')) {
+      const hybridHeaders = dictGet(raw, 'headers');
+      if (isDict(hybridHeaders)) {
+        const headerValues = new Map<string, unknown>();
+        for (const [header, value] of dictItems(hybridHeaders)) {
+          entry.header_names.add(header);
+          headerValues.set(header, value);
+          entry.inline_secrets += 1;
+        }
+        if (headerValues.size) entry.header_values = headerValues;
+      } else {
+        inspectMalformed(entry, "'headers' is not an object");
+      }
+    }
+    if (dictHas(raw, 'cwd') && typeof dictGet(raw, 'cwd') !== 'string') {
+      inspectMalformed(entry, "'cwd' must be a string");
+    }
+  } else if (!hasHttpUrl) {
+    if (entry.inspection === 'ok') entry.inspection = 'unknown';
+    entry.notes.push(
+      'entry matches neither {command, args?, env?, cwd?} nor' +
+        ' {serverUrl|url, headers?}',
+    );
+  }
+  const authFields = ['authProviderType', 'oauth'].filter((field) =>
+    dictHas(raw, field),
+  );
+  if (authFields.length) {
+    entry.notes.push(
+      `explicit ${authFields.map((field) => `'${field}'`).join(' and ')}` +
+        ' policy recorded; authentication path is an owner decision',
+    );
+  }
+  const disabled = dictGet(raw, 'disabled');
+  if (disabled === true) {
+    entry.enabled = false;
+  } else if (disabled === false) {
+    entry.enabled = true;
+  } else if (dictHas(raw, 'disabled')) {
+    inspectMalformed(entry, "'disabled' must be a boolean");
+  }
+  return entry;
+}
+
 /** Approval signals from .claude/settings.local.json (names only). */
 function claudeApprovals(root: string): Dict {
   const path = join(root, CLAUDE_SETTINGS);
@@ -1203,7 +1428,11 @@ function claudeApprovals(root: string): Dict {
 }
 
 /** (public block, private entries, aux) for one client's project file. */
-function parseClient(root: string, client: string): ParsedClient {
+function parseClient(
+  root: string,
+  client: string,
+  machine?: Dict,
+): ParsedClient {
   const relativePath = CLIENT_PATHS[client];
   const path = join(root, relativePath);
   const block: Record<string, unknown> = {
@@ -1257,15 +1486,41 @@ function parseClient(root: string, client: string): ParsedClient {
         [entries, problems] = claudeEntries(doc);
       } else if (client === 'codex') {
         [entries, problems] = codexEntries(doc);
+      } else if (client === 'antigravity') {
+        [entries, problems] = antigravityEntries(doc);
       } else {
         [entries, problems, aux] = opencodeEntries(doc);
       }
       (dictGet(block, 'diagnostics') as string[]).push(...problems);
     }
   }
+  const antigravitySecrets =
+    client === 'antigravity' ? antigravitySecretValues(machine) : [];
   const entriesBlock = new Map<string, unknown>();
   for (const [name, entry] of entries) {
-    entriesBlock.set(name, publicEntry(entry));
+    const pub = publicEntry(entry);
+    if (client === 'antigravity') {
+      const pubUrl = dictGet(pub, 'url');
+      if (
+        (typeof entry.url === 'string' &&
+          (ANTIGRAVITY_UNEXPANDED_REF.test(entry.url) ||
+            containsAntigravitySecret(entry.url, antigravitySecrets, true))) ||
+        (typeof pubUrl === 'string' &&
+          (ANTIGRAVITY_UNEXPANDED_REF.test(pubUrl) ||
+            containsAntigravitySecret(pubUrl, antigravitySecrets, true)))
+      ) {
+        dictSet(pub, 'url', null);
+      }
+      const pubCommand = dictGet(pub, 'command');
+      if (
+        typeof pubCommand === 'string' &&
+        (ANTIGRAVITY_UNEXPANDED_REF.test(pubCommand) ||
+          containsAntigravitySecret(pubCommand, antigravitySecrets, false))
+      ) {
+        dictSet(pub, 'command', null);
+      }
+    }
+    entriesBlock.set(name, pub);
   }
   dictSet(block, 'entries', entriesBlock);
   if (client === 'claude') {
@@ -1286,10 +1541,11 @@ function parseClient(root: string, client: string): ParsedClient {
 export function inspectProject(
   root: string,
   clients: readonly string[] = CLIENTS,
+  machine?: Dict,
 ): Dict {
   const snapshot = new Map<string, unknown>();
   for (const client of checkClients(clients)) {
-    snapshot.set(client, parseClient(root, client)[0]);
+    snapshot.set(client, parseClient(root, client, machine)[0]);
   }
   return snapshot;
 }
@@ -1303,9 +1559,13 @@ export function inspectProject(
  * argument lists for in-memory equivalence checks only; only
  * `public` output may ever be emitted.
  */
-export function inspectClient(root: string, client: string): ParsedClient {
+export function inspectClient(
+  root: string,
+  client: string,
+  machine?: Dict,
+): ParsedClient {
   checkClients([client]);
-  return parseClient(root, client);
+  return parseClient(root, client, machine);
 }
 
 /** The endpoint-equivalence heuristic, shared with alignment checks. */
@@ -1475,6 +1735,33 @@ function classify(
   const confirmed = isDict(perService)
     ? dictGetOr(perService, client, null)
     : null;
+  if (client === 'antigravity' && antigravityRemoteAuthUnsupported(service)) {
+    if (confirmed !== null && confirmed !== undefined) {
+      dictSet(result, 'registration', confirmed);
+    }
+    dictSet(result, 'state', 'unsupported');
+    (dictGet(result, 'diagnostics') as string[]).push(
+      ANTIGRAVITY_REMOTE_AUTH_UNSUPPORTED,
+    );
+    return result;
+  }
+  if (client === 'antigravity') {
+    const endpoint = serviceEndpoint(service, machine);
+    const serviceRefusals = antigravitySafetyGate({
+      urls: typeof endpoint === 'string' ? [endpoint] : [],
+      command: serviceCommand(service, machine),
+      mode: 'write',
+      machine,
+    });
+    if (serviceRefusals.length) {
+      if (confirmed !== null && confirmed !== undefined) {
+        dictSet(result, 'registration', confirmed);
+      }
+      dictSet(result, 'state', 'unsupported');
+      (dictGet(result, 'diagnostics') as string[]).push(...serviceRefusals);
+      return result;
+    }
+  }
   const shadowed = aux.shadowed ?? new Set<string>();
   if (confirmed !== null && confirmed !== undefined) {
     dictSet(result, 'registration', confirmed);
@@ -1525,7 +1812,22 @@ function classify(
     } else if (matches.length === 1) {
       dictSet(result, 'candidates', matches);
       const entry = entries.get(matches[0]) as InspectEntry;
-      if (entry.enabled === false) {
+      const agRefusals =
+        client === 'antigravity'
+          ? antigravitySafetyGate({
+              urls: [entry.url],
+              command: entry.command,
+              envValues: entry.env_values,
+              headerValues: entry.header_values,
+              headerNames: entry.header_names,
+              mode: entry.enabled === false ? 'write' : 'reuse',
+              machine,
+            })
+          : [];
+      if (agRefusals.length) {
+        dictSet(result, 'state', 'unsupported');
+        (dictGet(result, 'diagnostics') as string[]).push(...agRefusals);
+      } else if (entry.enabled === false) {
         dictSet(result, 'state', 'conflict');
         (dictGet(result, 'diagnostics') as string[]).push(
           `matching registration ${pyStrRepr(matches[0])} is explicitly` +
@@ -1540,7 +1842,7 @@ function classify(
         );
       }
     } else {
-      unregistered(result, service, block, machine);
+      unregistered(result, service, block, machine, client);
     }
   }
   return result;
@@ -1571,6 +1873,22 @@ function applyEntry(
         ' express',
     );
     return;
+  }
+  if (client === 'antigravity') {
+    const refusals = antigravitySafetyGate({
+      urls: [entry.url],
+      command: entry.command,
+      envValues: entry.env_values,
+      headerValues: entry.header_values,
+      headerNames: entry.header_names,
+      mode: entry.enabled === false ? 'write' : 'reuse',
+      machine,
+    });
+    if (refusals.length) {
+      dictSet(result, 'state', 'unsupported');
+      (dictGet(result, 'diagnostics') as string[]).push(...refusals);
+      return;
+    }
   }
   if (entry.enabled === false) {
     dictSet(result, 'state', 'conflict');
@@ -1649,7 +1967,7 @@ function applyEntry(
   const missing = pySortedStrings(
     [...declared].filter((name) => !carried.has(name)),
   );
-  if (missing.length) {
+  if (missing.length && !(client === 'antigravity' && entry.transport === 'stdio')) {
     dictSet(result, 'state', 'conflict');
     (dictGet(result, 'diagnostics') as string[]).push(
       'auth mismatch: the entry does not reference declared' +
@@ -1664,7 +1982,32 @@ function applyEntry(
   (dictGet(result, 'diagnostics') as string[]).push(
     ...mcpRequirements.unmet(service, withoutRegistrations),
   );
-  if (declared.size || carried.size) {
+  if (client === 'antigravity' && entry.transport === 'stdio' && declared.size) {
+    (dictGet(result, 'limitations') as string[]).push(
+      `Antigravity stdio servers inherit ${pySortedStrings(declared).join(', ')}` +
+        ' from the environment T3 launches Antigravity with (no env entry is' +
+        ' written)',
+    );
+  }
+  const hasAntigravityLiterals =
+    client === 'antigravity' &&
+    (entry.header_names.size > 0 || entry.env_names.size > 0);
+  if (hasAntigravityLiterals) {
+    (dictGet(result, 'limitations') as string[]).push(
+      ...antigravityLiteralReuseNotes(entry),
+    );
+  }
+  const connectionAuth =
+    dictGetOr((dictGetOr(service, 'connection', {}) as Dict) ?? {}, 'auth', {}) ??
+    {};
+  const isOauth =
+    isDict(connectionAuth) && dictGet(connectionAuth, 'mechanism') === 'oauth';
+  if (
+    declared.size ||
+    carried.size ||
+    (client === 'antigravity' && isOauth) ||
+    hasAntigravityLiterals
+  ) {
     dictSet(result, 'state', 'auth-unverified');
     (dictGet(result, 'limitations') as string[]).push(
       'static inspection cannot verify login or read access;' +
@@ -1719,11 +2062,24 @@ function claudeApprovalNote(result: Dict, name: string, block: Dict): void {
   }
 }
 
+function antigravityRemoteAuthUnsupported(service: Dict): boolean {
+  const connection = dictGet(service, 'connection');
+  if (!isDict(connection) || dictGet(connection, 'type') !== 'remote') {
+    return false;
+  }
+  const auth = dictGetOr(connection, 'auth', {}) ?? {};
+  const isApiKey = isDict(auth) && dictGet(auth, 'mechanism') === 'api-key';
+  const credRefs =
+    (dictGetOr(service, 'credential_refs', []) as unknown[]) ?? [];
+  return isApiKey || credRefs.length > 0;
+}
+
 function unregistered(
   result: Dict,
   service: Dict,
   block: Dict,
   machine: Dict,
+  client: string,
 ): void {
   const connection = dictGet(service, 'connection');
   if (connection === null || connection === undefined) {
@@ -1818,7 +2174,7 @@ export function assess(
     'this machine';
   const parsed = new Map<string, ParsedClient>();
   for (const client of checkClients(options.clients ?? CLIENTS)) {
-    parsed.set(client, parseClient(root, client));
+    parsed.set(client, parseClient(root, client, machine));
   }
   const [manifestInfo, services] = manifestOf(root);
   const results: Dict[] = [];
@@ -1879,6 +2235,8 @@ const SOURCE_HANDLED = new Map<string, Set<string>>([
   ['codex\x00stdio', new Set(['command', 'args', 'env_vars'])],
   ['opencode\x00remote', new Set(['type', 'url', 'headers'])],
   ['opencode\x00stdio', new Set(['type', 'command', 'environment'])],
+  ['antigravity\x00remote', new Set(['serverUrl', 'url', 'headers'])],
+  ['antigravity\x00stdio', new Set(['command', 'args', 'env'])],
 ]);
 
 function sourceHandled(client: string, transport: string): Set<string> {
@@ -2022,7 +2380,7 @@ function rawSourceFields(root: string, source: Dict | null): Dict {
         if ((error as Error)?.name !== 'ValueError') throw error;
         doc = parseJsonc(text);
       }
-      if (client === 'claude') {
+      if (client === 'claude' || client === 'antigravity') {
         const servers = isDict(doc) ? dictGetOr(doc, 'mcpServers', null) : null;
         raw = isDict(servers) ? dictGetOr(servers, registration, null) : null;
       } else {
@@ -2158,6 +2516,420 @@ function credentialArgs(command: string[], machine: Dict): string[] {
   return diagnostics;
 }
 
+function antigravityUnexpandedRefNames(value: string): string[] {
+  const names = new Set<string>();
+  for (const match of value.matchAll(ANTIGRAVITY_UNEXPANDED_REF_CAPTURE)) {
+    const name = match[1] ?? match[2] ?? match[3];
+    if (name) names.add(name);
+  }
+  return pySortedStrings(names);
+}
+
+function antigravitySecretValues(machine?: Dict): string[] {
+  const secrets: string[] = [];
+  if (machine) {
+    for (const secret of (dictGetOr(
+      machine,
+      'secret_values',
+      [],
+    ) as Iterable<unknown>) ?? []) {
+      if (typeof secret === 'string' && secret.length > 0) {
+        secrets.push(secret);
+      }
+    }
+  }
+  return secrets;
+}
+
+function containsAntigravitySecret(
+  value: string,
+  secrets: readonly string[],
+  caseInsensitive = false,
+): boolean {
+  if (!secrets.length) return false;
+  if (!caseInsensitive) {
+    return secrets.some((secret) => value === secret || value.includes(secret));
+  }
+  const lower = value.toLowerCase();
+  return secrets.some((secret) => {
+    const lowerSecret = secret.toLowerCase();
+    return lower === lowerSecret || lower.includes(lowerSecret);
+  });
+}
+
+function antigravityLiteralReuseNotes(entry: InspectEntry): string[] {
+  const notes: string[] = [];
+  if (entry.header_names.size > 0) {
+    notes.push(
+      `auth-unverified: existing owner-written entry carries literal header(s): ${pySortedStrings(entry.header_names).join(', ')}` +
+        ' (values redacted; Antigravity does not expand references, left' +
+        ' untouched)',
+    );
+  }
+  if (entry.env_names.size > 0) {
+    notes.push(
+      `auth-unverified: existing owner-written entry carries literal env variable(s): ${pySortedStrings(entry.env_names).join(', ')}` +
+        ' (values redacted; Antigravity does not expand references, left' +
+        ' untouched)',
+    );
+  }
+  return notes;
+}
+
+type AntigravityGateMode = 'write' | 'reuse';
+
+interface AntigravityGateInput {
+  urls?: readonly (string | null | undefined)[];
+  command?: readonly string[] | null;
+  envValues?: ReadonlyMap<string, unknown> | null;
+  headerValues?: ReadonlyMap<string, unknown> | null;
+  headerNames?: ReadonlySet<string> | null;
+  rawEntry?: Dict | null;
+  machine?: Dict;
+  mode?: AntigravityGateMode;
+}
+
+/** Collect resolved and source URL strings for Antigravity gate validation. */
+function antigravitySourceUrls(
+  resolved: Dict,
+  entry: InspectEntry | null,
+  sourceRaw: Dict,
+): string[] {
+  const urls: string[] = [];
+  const add = (value: unknown): void => {
+    if (typeof value === 'string' && value.length > 0) urls.push(value);
+  };
+  add(dictGet(resolved, 'endpoint'));
+  if (entry !== null) add(entry.url);
+  add(dictGet(sourceRaw, 'url'));
+  add(dictGet(sourceRaw, 'serverUrl'));
+  add(dictGet(sourceRaw, 'httpUrl'));
+  return urls;
+}
+
+/**
+ * Single safety gate for Antigravity entries across check, plan, translate,
+ * reuse, reenable, and apply.
+ *
+ * - `mode: 'write'` (default): refuses writing or activating (add, replace,
+ *   reenable) any entry carrying unexpanded environment references (${VAR},
+ *   $VAR, {env:VAR}), credential-bearing arguments or known secrets, unsafe
+ *   URL components (userinfo, query string, fragment, invalid authority/port,
+ *   or non-http(s) origin), or literal headers/env entries.
+ * - `mode: 'reuse'`: allows no-op reuse of an enabled, matching, owner-written
+ *   entry that carries literal headers or literal env values (never writing or
+ *   activating anything), while still refusing unexpanded reference syntax
+ *   (${VAR}, $VAR, {env:VAR}) in command, args, env values, URL, or headers,
+ *   and refusing unsafe URLs or secret/credential-bearing command/args.
+ *
+ * All diagnostics are redacted: field/header/env/variable names, argument
+ * positions, or URL components only — never raw values or reference syntax.
+ */
+function antigravitySafetyGate(input: AntigravityGateInput): string[] {
+  const mode: AntigravityGateMode = input.mode ?? 'write';
+  const diagnostics: string[] = [];
+  const urlsToCheck = new Set<string>();
+  const addUrl = (value: unknown): void => {
+    if (typeof value === 'string' && value.length > 0) {
+      urlsToCheck.add(value);
+    }
+  };
+  if (input.urls) {
+    for (const url of input.urls) addUrl(url);
+  }
+  let command: readonly string[] | null = input.command ?? null;
+  let headersMap: Map<string, unknown> | null = input.headerValues
+    ? new Map(input.headerValues)
+    : null;
+  let envMap: Map<string, unknown> | null = input.envValues
+    ? new Map(input.envValues)
+    : null;
+  let hasHeaderNamesOnly = Boolean(
+    !headersMap && input.headerNames && input.headerNames.size > 0,
+  );
+
+  if (input.rawEntry !== undefined && input.rawEntry !== null) {
+    const raw = input.rawEntry;
+    if (dictHas(raw, 'httpUrl')) {
+      diagnostics.push(
+        "'httpUrl' is not supported by Antigravity; only Streamable HTTP via" +
+          " 'serverUrl' (or alias 'url') is supported",
+      );
+      addUrl(dictGet(raw, 'httpUrl'));
+    }
+    if (dictHas(raw, 'serverUrl')) {
+      const serverUrl = dictGet(raw, 'serverUrl');
+      if (typeof serverUrl === 'string' && serverUrl.length > 0) {
+        addUrl(serverUrl);
+      } else {
+        diagnostics.push(
+          "remote entry has an invalid or non-string 'serverUrl'; refused for" +
+            ' Antigravity',
+        );
+      }
+    }
+    if (dictHas(raw, 'url')) {
+      const url = dictGet(raw, 'url');
+      if (typeof url === 'string' && url.length > 0) {
+        addUrl(url);
+      } else {
+        diagnostics.push(
+          "remote entry has an invalid or non-string 'url'; refused for" +
+            ' Antigravity',
+        );
+      }
+    }
+    if (headersMap === null && dictHas(raw, 'headers')) {
+      const rawHeaders = dictGet(raw, 'headers');
+      if (!isDict(rawHeaders)) {
+        diagnostics.push(
+          "remote entry has a non-object 'headers' field; refused for" +
+            ' Antigravity',
+        );
+      } else {
+        headersMap = new Map(dictItems(rawHeaders));
+        hasHeaderNamesOnly = false;
+      }
+    }
+    if (envMap === null && dictHas(raw, 'env')) {
+      const rawEnv = dictGet(raw, 'env');
+      if (!isDict(rawEnv)) {
+        diagnostics.push(
+          "stdio entry has a non-object 'env' field; refused for Antigravity",
+        );
+      } else {
+        envMap = new Map(dictItems(rawEnv));
+      }
+    }
+    if (command === null && (dictHas(raw, 'command') || dictHas(raw, 'args'))) {
+      const rawCommand = dictGet(raw, 'command');
+      const parts: string[] = [];
+      if (typeof rawCommand === 'string' && rawCommand.length > 0) {
+        parts.push(rawCommand);
+      } else if (dictHas(raw, 'command')) {
+        diagnostics.push(
+          "stdio entry has an invalid or non-string 'command'; refused for" +
+            ' Antigravity',
+        );
+      }
+      if (dictHas(raw, 'args')) {
+        const rawArgs = dictGet(raw, 'args');
+        if (!Array.isArray(rawArgs)) {
+          diagnostics.push(
+            "stdio entry has a non-array 'args' field; refused for Antigravity",
+          );
+        } else {
+          let sawNonString = false;
+          for (const arg of rawArgs) {
+            if (typeof arg === 'string') {
+              parts.push(arg);
+            } else {
+              sawNonString = true;
+            }
+          }
+          if (sawNonString) {
+            diagnostics.push(
+              "stdio entry has a non-string 'args' item; refused for" +
+                ' Antigravity',
+            );
+          }
+        }
+      }
+      if (parts.length > 0) command = parts;
+    }
+  }
+
+  const secrets = antigravitySecretValues(input.machine);
+
+  if (headersMap !== null && headersMap.size > 0) {
+    const literalHeaders: string[] = [];
+    for (const headerName of pySortedStrings(headersMap.keys())) {
+      const headerVal = headersMap.get(headerName);
+      if (typeof headerVal !== 'string') {
+        diagnostics.push(
+          `remote header ${headerName} has a non-string value; refused for` +
+            ' Antigravity',
+        );
+        continue;
+      }
+      let flagged = false;
+      const refNames = antigravityUnexpandedRefNames(headerVal);
+      if (refNames.length) {
+        diagnostics.push(
+          `remote header ${headerName} contains environment reference(s)` +
+            ` ${refNames.join(', ')}; Antigravity does not expand environment` +
+            ' references, so the header value would be passed literally',
+        );
+        flagged = true;
+      }
+      if (mode === 'write') {
+        if (containsAntigravitySecret(headerVal, secrets)) {
+          diagnostics.push(
+            `remote header ${headerName} matches a known secret value;` +
+              ' Antigravity does not expand environment references and this' +
+              ' tooling never writes or activates literal headers',
+          );
+          flagged = true;
+        }
+        if (!flagged) {
+          literalHeaders.push(headerName);
+        }
+      }
+    }
+    if (mode === 'write' && literalHeaders.length > 0) {
+      diagnostics.push(
+        `remote entry carries literal header(s) ${pySortedStrings(literalHeaders).join(', ')};` +
+          ' Antigravity does not expand environment references and this' +
+          ' tooling never writes or activates literal headers',
+      );
+    }
+  } else if (mode === 'write' && hasHeaderNamesOnly) {
+    diagnostics.push(ANTIGRAVITY_REMOTE_AUTH_UNSUPPORTED);
+  }
+
+  if (envMap !== null && envMap.size > 0) {
+    const literalEnv: string[] = [];
+    for (const envName of pySortedStrings(envMap.keys())) {
+      const envVal = envMap.get(envName);
+      if (typeof envVal !== 'string') {
+        diagnostics.push(
+          `stdio env variable ${envName} has a non-string value; refused for` +
+            ' Antigravity',
+        );
+        continue;
+      }
+      let flagged = false;
+      const refNames = antigravityUnexpandedRefNames(envVal);
+      if (refNames.length) {
+        diagnostics.push(
+          `stdio env variable ${envName} contains environment reference(s)` +
+            ` ${refNames.join(', ')}; Antigravity does not expand environment` +
+            ' references, so the env value would be passed literally',
+        );
+        flagged = true;
+      }
+      if (mode === 'write') {
+        if (containsAntigravitySecret(envVal, secrets)) {
+          diagnostics.push(
+            `stdio env variable ${envName} matches a known secret value; pass` +
+              ' credentials through the inherited environment instead of' +
+              ' writing or activating env entries',
+          );
+          flagged = true;
+        }
+        if (!flagged) {
+          literalEnv.push(envName);
+        }
+      }
+    }
+    if (mode === 'write' && literalEnv.length > 0) {
+      diagnostics.push(
+        `stdio entry carries literal env variable(s) ${pySortedStrings(literalEnv).join(', ')};` +
+          ' Antigravity does not expand environment references and this' +
+          ' tooling never writes or activates literal env entries',
+      );
+    }
+  }
+
+  for (const url of urlsToCheck) {
+    const refNames = antigravityUnexpandedRefNames(url);
+    if (refNames.length) {
+      diagnostics.push(
+        `remote URL contains environment reference(s) ${refNames.join(', ')};` +
+          ' Antigravity does not expand environment references, so the URL' +
+          ' would be passed literally',
+      );
+    }
+    if (containsAntigravitySecret(url, secrets, true)) {
+      diagnostics.push(
+        'remote URL contains a known secret value; refused for Antigravity',
+      );
+    }
+    let parsed: ReturnType<typeof pyUrlsplit> | null = null;
+    try {
+      const parts = pyUrlsplit(url);
+      void parts.hostname;
+      void parts.port;
+      parsed = parts;
+    } catch (error) {
+      if ((error as Error)?.name !== 'ValueError') throw error;
+      diagnostics.push(
+        'remote URL has an invalid authority or port and cannot be validated' +
+          ' for Antigravity',
+      );
+    }
+    if (parsed !== null) {
+      if (parsed.username !== null || parsed.password !== null) {
+        diagnostics.push(
+          'remote URL contains userinfo, which may carry credentials and is' +
+            ' refused for Antigravity',
+        );
+      }
+      if (parsed.query !== '' || url.includes('?')) {
+        diagnostics.push(
+          'remote URL contains a query string, which may carry credentials' +
+            ' and is refused for Antigravity',
+        );
+      }
+      if (parsed.fragment !== '' || url.includes('#')) {
+        diagnostics.push(
+          'remote URL contains a fragment, which may carry credentials and is' +
+            ' refused for Antigravity',
+        );
+      }
+      if (
+        (parsed.scheme !== 'http' && parsed.scheme !== 'https') ||
+        !parsed.hostname
+      ) {
+        diagnostics.push(
+          'remote URL must be an http or https origin with a hostname for' +
+            ' Antigravity',
+        );
+      }
+    }
+  }
+
+  if (command && command.length > 0) {
+    for (const [index, token] of command.entries()) {
+      const where =
+        index === 0
+          ? 'command (position 0)'
+          : `command argument at position ${index}`;
+      const subject = index === 0 ? 'command' : 'argument';
+      const names = antigravityUnexpandedRefNames(token);
+      if (names.length) {
+        diagnostics.push(
+          `${where} contains environment reference(s) ${names.join(', ')};` +
+            ' Antigravity does not expand environment references, so the' +
+            ` ${subject} would be passed literally`,
+        );
+      }
+      if (containsAntigravitySecret(token, secrets)) {
+        diagnostics.push(
+          `${where} matches a known secret value; pass credentials through` +
+            ' the inherited environment instead of command arguments',
+        );
+        continue;
+      }
+      if (index === 0) continue;
+      const [flag, separator] = partition(token, '=');
+      if (
+        flag.startsWith('-') &&
+        credentialFlagSearch(flag.replace(/^-+/, '')) &&
+        (separator !== '' || index < command.length - 1)
+      ) {
+        diagnostics.push(
+          `command argument at position ${index} looks credential-bearing;` +
+            ' pass credentials through the inherited environment instead of' +
+            ' command arguments',
+        );
+      }
+    }
+  }
+
+  return diagnostics;
+}
+
 // --- Translation ----------------------------------------------------------------
 
 const PY_WS =
@@ -2174,6 +2946,7 @@ const PY_WS =
 function bearerRef(source: Dict | null, sourceRaw: Dict): string | null {
   if (source === null) return null;
   const client = dictGet(source, 'client') as string;
+  if (client === 'antigravity') return null;
   if (client === 'codex') {
     const name = dictGet(sourceRaw, 'bearer_token_env_var');
     return typeof name === 'string' && name ? name : null;
@@ -2215,6 +2988,9 @@ function remoteEntry(
     if (credential) entry.set('bearer_token_env_var', credential);
     return entry;
   }
+  if (client === 'antigravity') {
+    return new Map<string, unknown>([['serverUrl', endpoint]]);
+  }
   const entry = new Map<string, unknown>([
     ['type', 'remote'],
     ['url', endpoint],
@@ -2250,7 +3026,7 @@ function stdioEntry(
   }
   const entry = new Map<string, unknown>([['command', command[0]]]);
   if (command.length > 1) entry.set('args', command.slice(1));
-  if (!credentials.length) return entry;
+  if (!credentials.length || client === 'antigravity') return entry;
   if (client === 'claude') {
     entry.set(
       'env',
@@ -2388,6 +3164,26 @@ function translate(
       );
       return [null, diagnostics, untranslated, prerequisites];
     }
+    if (client === 'antigravity') {
+      if (
+        credential !== null ||
+        (isDict(auth) && dictGet(auth, 'mechanism') === 'api-key') ||
+        declared.size > 0 ||
+        (entry !== null && entry.header_names.size > 0)
+      ) {
+        diagnostics.push(ANTIGRAVITY_REMOTE_AUTH_UNSUPPORTED);
+        return [null, diagnostics, untranslated, prerequisites];
+      }
+      const refusals = antigravitySafetyGate({
+        urls: antigravitySourceUrls(resolved, entry, sourceRaw),
+        mode: 'write',
+        machine,
+      });
+      if (refusals.length) {
+        diagnostics.push(...refusals);
+        return [null, diagnostics, untranslated, prerequisites];
+      }
+    }
     let scheme: string;
     try {
       scheme = pyUrlsplit(endpoint).scheme;
@@ -2425,12 +3221,24 @@ function translate(
     );
     return [null, diagnostics, untranslated, prerequisites];
   }
-  const refusals = credentialArgs(command, machine);
+  const refusals =
+    client === 'antigravity'
+      ? antigravitySafetyGate({ command, mode: 'write', machine })
+      : credentialArgs(command, machine);
   if (refusals.length) {
     diagnostics.push(...refusals);
     return [null, diagnostics, untranslated, prerequisites];
   }
   const translated = stdioEntry(client, command, pySortedStrings(declared));
+  if (client === 'antigravity') {
+    for (const name of pySortedStrings(declared)) {
+      prerequisites.push(
+        `environment variable ${name} must be present in the environment` +
+          ' T3 launches Antigravity with (Antigravity stdio servers inherit' +
+          ' the parent process environment; no env entry is written)',
+      );
+    }
+  }
   if (missingExecutable(command, machine)) {
     prerequisites.push(
       `executable ${pyStrRepr(command[0])} does not resolve on this` +
@@ -2458,6 +3266,7 @@ function entryPrerequisites(
   service: Dict,
   entry: InspectEntry,
   machine: Dict,
+  client?: string,
 ): string[] {
   const prerequisites: string[] = [];
   if (
@@ -2470,6 +3279,21 @@ function entryPrerequisites(
     );
   }
   const [declared] = authMaterial(entry, service);
+  const hasAntigravityLiterals =
+    client === 'antigravity' &&
+    (entry.header_names.size > 0 || entry.env_names.size > 0);
+  if (client === 'antigravity' && entry.transport === 'stdio') {
+    for (const name of pySortedStrings(declared)) {
+      prerequisites.push(
+        `environment variable ${name} must be present in the environment` +
+          ' T3 launches Antigravity with (Antigravity stdio servers inherit' +
+          ' the parent process environment; no env entry is written)',
+      );
+    }
+  }
+  if (hasAntigravityLiterals) {
+    prerequisites.push(...antigravityLiteralReuseNotes(entry));
+  }
   if (dictHas(machine, 'env')) {
     const env = new Set(
       (dictGetOr(machine, 'env', []) as Iterable<string>) ?? [],
@@ -2491,7 +3315,7 @@ function entryPrerequisites(
         ' the session in the client (no token is handled or copied)',
     );
   }
-  if (declared.size) {
+  if (declared.size || hasAntigravityLiterals) {
     prerequisites.push(
       'static inspection cannot verify login or read access; live' +
         ' verification is a separate authorized action',
@@ -2529,6 +3353,29 @@ function fillTranslation(
   }
   dictSet(action, 'untranslated', untranslated);
   (dictGet(action, 'prerequisites') as string[]).push(...prerequisites);
+}
+
+function antigravityPlanRemoteAuthUnsupported(
+  service: Dict,
+  resolved: Dict,
+  entry: InspectEntry | null,
+  sourceRaw: Dict,
+  source: Dict | null,
+): boolean {
+  if (antigravityRemoteAuthUnsupported(service)) return true;
+  if (dictGet(resolved, 'transport') !== 'remote') return false;
+  const connection = dictGetOr(service, 'connection', {}) ?? {};
+  const auth = isDict(connection)
+    ? (dictGetOr(connection, 'auth', {}) ?? {})
+    : {};
+  const credRefs =
+    (dictGetOr(service, 'credential_refs', []) as unknown[]) ?? [];
+  const isOauth = isDict(auth) && dictGet(auth, 'mechanism') === 'oauth';
+  return (
+    credRefs.length > 0 ||
+    (!isOauth && bearerRef(source, sourceRaw) !== null) ||
+    (entry !== null && entry.header_names.size > 0)
+  );
 }
 
 /** One planned action for a selected (service, client) pair. */
@@ -2585,6 +3432,52 @@ function planAction(
     return action;
   }
   (dictGet(action, 'diagnostics') as string[]).push(...sourceDiags);
+  const shadowed = aux.shadowed ?? new Set<string>();
+  const existing = entries.get(name);
+  if (client === 'antigravity' && antigravityRemoteAuthUnsupported(service)) {
+    dictSet(action, 'action', 'unsupported');
+    (dictGet(action, 'diagnostics') as string[]).push(
+      ANTIGRAVITY_REMOTE_AUTH_UNSUPPORTED,
+    );
+    return action;
+  }
+  const isSelfReuseSource =
+    client === 'antigravity' &&
+    source !== null &&
+    dictGet(source, 'client') === 'antigravity' &&
+    dictGet(source, 'registration') === name &&
+    existing !== undefined &&
+    existing.enabled !== false;
+  if (
+    client === 'antigravity' &&
+    !isSelfReuseSource &&
+    antigravityPlanRemoteAuthUnsupported(
+      service,
+      resolved,
+      entry,
+      sourceRaw,
+      source,
+    )
+  ) {
+    dictSet(action, 'action', 'unsupported');
+    (dictGet(action, 'diagnostics') as string[]).push(
+      ANTIGRAVITY_REMOTE_AUTH_UNSUPPORTED,
+    );
+    return action;
+  }
+  if (client === 'antigravity') {
+    const plannedRefusals = antigravitySafetyGate({
+      urls: antigravitySourceUrls(resolved, entry, sourceRaw),
+      command: dictGet(resolved, 'command') as string[] | null,
+      mode: 'write',
+      machine,
+    });
+    if (plannedRefusals.length) {
+      dictSet(action, 'action', 'unsupported');
+      (dictGet(action, 'diagnostics') as string[]).push(...plannedRefusals);
+      return action;
+    }
+  }
   let allow: Dict = new Map<string, unknown>();
   let disabled = new Set<string>();
   if (client === 'claude') {
@@ -2598,8 +3491,22 @@ function planAction(
       );
     }
   }
-  const shadowed = aux.shadowed ?? new Set<string>();
-  const existing = entries.get(name);
+  if (client === 'antigravity' && existing !== undefined) {
+    const existingRefusals = antigravitySafetyGate({
+      urls: [existing.url],
+      command: existing.command,
+      envValues: existing.env_values,
+      headerValues: existing.header_values,
+      headerNames: existing.header_names,
+      mode: existing.enabled === false ? 'write' : 'reuse',
+      machine,
+    });
+    if (existingRefusals.length) {
+      dictSet(action, 'action', 'unsupported');
+      (dictGet(action, 'diagnostics') as string[]).push(...existingRefusals);
+      return action;
+    }
+  }
   if (existing !== undefined || shadowed.has(name)) {
     const conflicts: string[] = [];
     if (shadowed.has(name)) {
@@ -2654,7 +3561,10 @@ function planAction(
       }
       const [declared, carried] = authMaterial(inspect, service);
       const missing = [...declared].filter((item) => !carried.has(item));
-      if (missing.length) {
+      if (
+        missing.length &&
+        !(client === 'antigravity' && inspect.transport === 'stdio')
+      ) {
         conflicts.push(
           'auth mismatch: the entry does not reference declared' +
             ` credential name(s) ${pySortedStrings(missing).join(', ')}`,
@@ -2684,7 +3594,7 @@ function planAction(
           ' left untouched',
       );
       (dictGet(action, 'prerequisites') as string[]).push(
-        ...entryPrerequisites(service, existing as InspectEntry, machine),
+        ...entryPrerequisites(service, existing as InspectEntry, machine, client),
       );
       if (client === 'claude' && !dictHas(allow, name)) {
         dictSet(action, 'action', 'approval-grant');
@@ -2859,7 +3769,7 @@ export function buildPlan(
   const selected = selectionsOf(selections, clients);
   const parsed = new Map<string, ParsedClient>();
   for (const client of clients) {
-    parsed.set(client, parseClient(resolvedRoot, client));
+    parsed.set(client, parseClient(resolvedRoot, client, machine));
   }
   const [manifestInfo, services] = manifestOf(resolvedRoot);
   const byId = new Map<string, Dict>();
@@ -3196,6 +4106,7 @@ function putEntry(
   current: Map<string, string | null>,
   action: Dict,
   replace: boolean,
+  machine?: Dict,
 ): void {
   const entry = dictGet(action, 'entry');
   if (!isDict(entry)) {
@@ -3224,6 +4135,7 @@ function putEntry(
       dictGet(action, 'registration') as string,
       entry,
       replace,
+      machine,
     );
   }
 }
@@ -3236,11 +4148,25 @@ function putEntryJson(
   name: string,
   entry: Dict,
   replace: boolean,
+  machine?: Dict,
 ): void {
+  if (client === 'antigravity') {
+    const refusals = antigravitySafetyGate({
+      rawEntry: entry,
+      mode: 'write',
+      machine,
+    });
+    if (refusals.length) {
+      throw new ValueError(
+        `${rel}: refusing to write unsafe Antigravity entry` +
+          ` mcpServers.${name} (${refusals.join('; ')}); no files written`,
+      );
+    }
+  }
   const slot = jsonSlot(state, current, rel);
   const doc = slot.doc;
   let servers: Dict;
-  if (client === 'claude') {
+  if (client === 'claude' || client === 'antigravity') {
     servers = tableOf(doc, 'mcpServers', rel);
   } else {
     const mcp = tableOf(doc, 'mcp', rel);
@@ -3422,6 +4348,7 @@ function reenable(
   state: ApplyState,
   current: Map<string, string | null>,
   action: Dict,
+  machine?: Dict,
 ): void {
   const client = dictGet(action, 'client') as string;
   const name = dictGet(action, 'registration') as string;
@@ -3465,6 +4392,34 @@ function reenable(
       slot.touched = true;
     }
     dictSet(expect, name, dictCopy(entry));
+    return;
+  }
+  if (client === 'antigravity') {
+    const rel = dictGet(action, 'file') as string;
+    const slot = jsonSlot(state, current, rel);
+    const servers = dictGetOr(slot.doc, 'mcpServers', null);
+    const entry = isDict(servers) ? dictGetOr(servers, name, null) : null;
+    if (!isDict(entry)) {
+      throw new ValueError(
+        `${rel}: no mcpServers.${name} entry to re-enable; no files written`,
+      );
+    }
+    const refusals = antigravitySafetyGate({
+      rawEntry: entry,
+      mode: 'write',
+      machine,
+    });
+    if (refusals.length) {
+      throw new ValueError(
+        `${rel}: refusing to re-enable unsafe Antigravity entry` +
+          ` mcpServers.${name} (${refusals.join('; ')}); no files written`,
+      );
+    }
+    if (dictHas(entry, 'disabled')) {
+      dictDel(entry, 'disabled');
+      slot.touched = true;
+    }
+    dictSet(slot.expect, name, dictCopy(entry));
     return;
   }
   const slot = tomlSlot(state, current, dictGet(action, 'file') as string);
@@ -3520,6 +4475,7 @@ function reenable(
 function applyActions(
   plan: Dict,
   current: Map<string, string | null>,
+  machine?: Dict,
 ): [ApplyState, Dict[], Dict[]] {
   const state: ApplyState = {
     json: new Map<string, JsonSlot>(),
@@ -3548,12 +4504,12 @@ function applyActions(
       continue;
     }
     if (kind === 'add' || kind === 'replace') {
-      putEntry(state, current, action, kind === 'replace');
+      putEntry(state, current, action, kind === 'replace', machine);
       if (dictGet(action, 'client') === 'claude') {
         clearDisabled(state, current, dictGet(action, 'registration') as string);
       }
     } else if (kind === 'reenable') {
-      reenable(state, current, action);
+      reenable(state, current, action, machine);
     }
     if (dictGet(action, 'client') === 'claude') {
       grantApprovals(state, current, dictGet(action, 'approvals') as string[]);
@@ -3604,7 +4560,7 @@ function verifyJsonClient(rel: string, slot: JsonSlot): void {
   const before = slot.before;
   const after = slot.doc;
   const expect = slot.expect;
-  if (rel === CLIENT_PATHS['claude']) {
+  if (rel === CLIENT_PATHS['claude'] || rel === CLIENT_PATHS['antigravity']) {
     const keys = new Set([...dictKeys(before), ...dictKeys(after)]);
     for (const key of keys) {
       if (
@@ -3865,7 +4821,11 @@ function verifyToml(
  * refreshed and applied actions marked, so re-applying the same plan
  * is a no-op.
  */
-export function apply(plan: unknown, root?: string): Dict {
+export function apply(
+  plan: unknown,
+  root?: string,
+  options?: { machine?: Dict },
+): Dict {
   validatePlan(plan);
   const planDict = plan as Dict;
   const resolvedRoot = resolvePath(dictGet(planDict, 'root') as string);
@@ -3932,7 +4892,11 @@ export function apply(plan: unknown, root?: string): Dict {
     }
     current.set(rel, present ? readText(path) : null);
   }
-  const [state, applied, skipped] = applyActions(planDict, current);
+  const [state, applied, skipped] = applyActions(
+    planDict,
+    current,
+    options?.machine,
+  );
   const writes = serializeWrites(state);
   for (const [rel, text] of writes) {
     atomic(join(resolvedRoot, rel), text);
@@ -4118,7 +5082,8 @@ const CHECK_HELP =
   'options:\n' +
   '  -h, --help         show this help message and exit\n' +
   '  --root ROOT\n' +
-  '  --clients CLIENTS\n' +
+  '  --clients CLIENTS  comma-separated clients (claude, codex, opencode,\n' +
+  '                     antigravity); defaults to claude,codex,opencode\n' +
   '  --mapping MAPPING  JSON file with the confirmed\n' +
   '                     service->client->registration names\n' +
   '  --machine MACHINE  JSON file describing this machine: present env-var names,\n' +
@@ -4129,7 +5094,8 @@ const PLAN_HELP =
   'options:\n' +
   '  -h, --help            show this help message and exit\n' +
   '  --root ROOT\n' +
-  '  --clients CLIENTS\n' +
+  '  --clients CLIENTS     comma-separated clients (claude, codex, opencode,\n' +
+  '                        antigravity); defaults to claude,codex,opencode\n' +
   '  --mapping MAPPING     JSON file with the confirmed\n' +
   '                        service->client->registration names\n' +
   '  --machine MACHINE     JSON file describing this machine\n' +

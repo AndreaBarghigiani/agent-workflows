@@ -127,19 +127,42 @@ Verified in fresh `gemini-4-neon` children (`delegate_task`):
 - **Project `.agents/mcp_config.json` (runtime-verified):** A disposable
   stdio fixture (`aw-fixture`, read-only `fixture_ping`, no credentials)
   logged `server/discover`, `initialize`, `notifications/initialized`, and
-  `tools/list` at startup. The first probe reported it unavailable; a second
-  fresh child after `sleep 15` invoked it as a lazy tool via `call_mcp_tool`
-  (not an eager namespace) and received `pong-AW4-FIXTURE` (`tools/call`
-  logged). Briefs should tell Antigravity children to look via
-  `call_mcp_tool`. Whether the first miss was timing or a self-report error
-  is unverified.
-- **Toolkit gap (documented):**
+  `tools/list` at startup, and a stdio fixture saw variables inherited from
+  the environment T3 launches Antigravity with. Remote Streamable HTTP via
+  `serverUrl` was runtime-verified with a local fixture on `127.0.0.1`;
+  header values arrived literally, and `${VAR}`, `$VAR`, and `{env:VAR}`
+  were passed literally without expansion in args, env, and headers
+  (verified with Antigravity ACP `1.5.18`). Project MCP tools reach the
+  model lazily through `call_mcp_tool` rather than an eager namespace. Of
+  7 fresh sessions with a project fixture, 5 reached the tools (after an
+  initial 15–20 s wait; one only on a re-check after about 40 s; in one, a
+  remote server was visible at turn start and the stdio server only after
+  the wait). In the other 2, ACP had spawned the server, but the child
+  reported `call_mcp_tool` absent. Briefs should tell Antigravity
+  children to look via `call_mcp_tool` and wait and re-check before
+  concluding a project MCP server is missing; this is an upstream timing
+  limitation (Antigravity ACP `1.5.18`).
+- **`configure-mcp` support (documented / runtime-verified):**
   [configure-mcp](../.agents/skills/configure-mcp/SKILL.md)
-  (`mcp_configure`) targets only `claude`, `codex`, and `opencode`, with no
-  Antigravity (`.agents/mcp_config.json`) destination. Until added,
-  registering [`.agents/mcp-requirements.json`](mcp-requirements.md)
-  services for Antigravity is a manual owner-reviewed edit under check-only
-  default and redacted-plan confirmation.
+  (`mcp_configure --clients antigravity`) aligns stdio, no-auth remote, and
+  OAuth remote services from
+  [`.agents/mcp-requirements.json`](mcp-requirements.md) into
+  `.agents/mcp_config.json` under the check-only default and redacted-plan
+  confirmation flow. Stdio credentials are reported as inherited-environment
+  prerequisites (no `env` block is written), and the safety gate refuses
+  writing or activating (`add`, `replace`, `reenable`) entries that carry
+  `${VAR}`, `$VAR`, or `{env:VAR}` references, known secrets, unsafe URL
+  components (userinfo, query strings, fragments), or literal `headers`/`env`
+  entries, using redacted name/position diagnostics. No-op reuse of an
+  already-enabled, matching, owner-written entry is allowed even when it
+  carries literal headers or literal `env` values—writing and activating
+  nothing, and reporting `auth-unverified` with header and `env` names
+  only—unless the entry contains unexpanded reference syntax (`${VAR}`,
+  `$VAR`, `{env:VAR}`) in command, args, `env`, URL, or headers, or the
+  manifest declares an API-key/bearer remote service, which stays
+  `unsupported` because Antigravity does not expand environment references
+  (verified `1.5.18`: `${VAR}`, `$VAR`, and `{env:VAR}` arrive literally in
+  args, env, and headers) and the toolkit never writes literal secrets.
 
 ## Basic Memory
 
@@ -165,8 +188,8 @@ Client MCP configuration and project routing stay separate:
 | Harness worktree (`isolation: "worktree"`) | Runtime-verified | T3 owns lifecycle; discovery & validation suite ran. |
 | T3 checkout-readiness consumer action | Unverified | Library check exited 1 deterministically; consumer worktree untested. |
 | GitHub CLI (`gh`) reads | Runtime-verified | `gh auth status` and `gh issue view 4` succeeded. |
-| Local stdio `.agents/mcp_config.json` | Runtime-verified | Lazy via `call_mcp_tool`; first-probe miss cause unverified. |
-| Remote/auth MCP & `configure-mcp` | Unverified / gap | Remote, auth, conflicts & isolation untested; no Antigravity target yet. |
+| Local stdio `.agents/mcp_config.json` | Runtime-verified | Inherited env verified; lazy via `call_mcp_tool`; reached in 5 of 7 sessions, one only after ~40 s (ACP `1.5.18` timing limit). |
+| Remote/auth MCP & `configure-mcp` | Runtime-verified / partial | Streamable HTTP `serverUrl` verified on `127.0.0.1` (no env expansion, literal headers); `configure-mcp --clients antigravity` aligns stdio, no-auth remote, and OAuth remote, and reports API-key/bearer remote `unsupported`; same-name conflicts & isolation untested. |
 | Basic Memory (routing, reads, writes) | Unverified | Blocked on configured server; not a valid `clients` selection. |
 | Supervised implement & review delivery | Runtime-verified | Issue #4: Gemini implemented this guide (Codex-reviewed) and reviewed a separate README change. |
 
@@ -175,8 +198,9 @@ Client MCP configuration and project routing stay separate:
 - Consumer symlinked `.agents/skills`, adopted/vendor-installed third-party
   skills, and same-name skill shadowing precedence.
 - Generated T3 checkout-readiness action on a real consumer worktree.
-- Remote HTTP/SSE MCP, authenticated remote MCP with credential references,
-  same-name conflicts, and instance isolation.
+- Authenticated remote MCP with credential references (blocked by no env
+  expansion), live OAuth login, same-name registration conflicts, and
+  instance isolation.
 - Basic Memory routing, schemas, reads, writes, and a memory-declined
   fixture.
 - `gemini-pro-orchestrator-neon`, `gpt-oss-120b-medium`, and internal
@@ -199,8 +223,16 @@ Client MCP configuration and project routing stay separate:
   `gh`, `npm ci`, `node scripts/validate.ts`, `npx tsc --noEmit`,
   `node --test` (551 pass, 0 fail on Node v24.22.3), and deterministic
   `t3_readiness --project . --check` exit 1 on the library checkout.
-- Disposable `.agents/mcp_config.json` stdio fixture verified ACP discovery
-  and lazy `call_mcp_tool` returning `pong-AW4-FIXTURE`.
+- Disposable `.agents/mcp_config.json` stdio and local `127.0.0.1`
+  Streamable HTTP (`serverUrl`) fixtures verified ACP discovery, inherited
+  stdio environment, literal header/arg/env handling (no `${VAR}`, `$VAR`,
+  or `{env:VAR}` expansion in Antigravity `1.5.18`), and lazy `call_mcp_tool`
+  availability (5 of 7 fresh sessions reached the tools, one only after a
+  ~40 s re-check; in 2 the server was spawned but not exposed).
+- End to end: `mcp_configure check`, `plan` and `apply --confirm` with
+  `--clients antigravity` wrote a stdio and a `serverUrl` entry into
+  `.agents/mcp_config.json` (a re-run wrote nothing), and a fresh
+  `gemini-4-neon` session called both through `call_mcp_tool`.
 - Issue #4 delivery: `gemini-4-neon` (`thought_level: high`) implemented
   this guide, and Codex `gpt-6.1-sol` reviewed it independently; its one
   finding (this claim was stated before the reviews finished) was fixed.
@@ -209,11 +241,18 @@ Client MCP configuration and project routing stay separate:
 
 ## Gaps
 
-- `configure-mcp` (`mcp_configure`) lacks an Antigravity
-  (`.agents/mcp_config.json`) target; manual owner-reviewed edits under
-  check-only default and redacted-plan confirmation apply meantime.
-- Project MCP tools appear lazily via `call_mcp_tool`, not eagerly; briefs
-  should note this, and the first-probe miss cause remains unverified.
+- Authenticated remote services requiring credential references remain
+  unsupported for Antigravity (`configure-mcp --clients antigravity` reports
+  them `unsupported`) because `.agents/mcp_config.json` does not expand
+  `${VAR}`, `$VAR`, or `{env:VAR}` (verified `1.5.18`); conflicts with
+  existing same-name registrations and instance isolation are not
+  live-tested.
+- Project MCP tools appear lazily via `call_mcp_tool`, not eagerly, and
+  exposing them has an upstream timing limitation in Antigravity ACP
+  `1.5.18` (tools reached the model in 5 of 7 sessions, one only after a
+  ~40 s re-check); briefs
+  should tell children to wait and re-check before concluding a project MCP
+  server is missing.
 - ACP startup logs a plugin-MCP "not logged into Antigravity" warning
   despite working T3 OAuth calls; plugin MCP impact is unknown.
 - Basic Memory is unverified (no server on host) and `antigravity` is not a

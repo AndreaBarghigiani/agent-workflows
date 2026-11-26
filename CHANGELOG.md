@@ -12,6 +12,7 @@ numbering restarts here.
 ### Added
 
 - [Antigravity setup](docs/antigravity.md): an evidence-based guide to running Antigravity Gemini delegates through T3 Code's ACP integration. It covers provider, model and `thought_level` selection, Google sign-in routes, rule and skill discovery, harness worktrees, project `.agents/mcp_config.json` MCP servers, and the remaining gaps.
+- `mcp_configure` (`configure-mcp`): added the opt-in `antigravity` client targeting `.agents/mcp_config.json` (`--clients antigravity`), aligning stdio (with inherited-environment credential prerequisites), no-auth remote (`serverUrl`), and OAuth remote services while reporting API-key/bearer remote services as `unsupported` because Antigravity does not expand environment references.
 
 ## [0.1.1] - 2026-11-25
 

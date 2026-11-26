@@ -1,0 +1,51 @@
+{
+  "mcpServers": {
+    "memory": {
+      "serverUrl": "https://memory.example.test/mcp"
+    },
+    "docs_alias": {
+      "url": "https://docs.example.test/mcp"
+    },
+    "both_urls": {
+      "serverUrl": "https://primary.example.test/mcp",
+      "url": "https://fallback.example.test/mcp"
+    },
+    "legacy_http": {
+      "httpUrl": "https://legacy.example.test/mcp"
+    },
+    "tracker": {
+      "serverUrl": "https://tracker.example.test/mcp",
+      "headers": {
+        "Authorization": "Bearer SECRET_SENTINEL-do-not-emit"
+      }
+    },
+    "ref_literal": {
+      "serverUrl": "https://ref.example.test/mcp",
+      "headers": {
+        "Authorization": "Bearer ${TRACKER_API_TOKEN}"
+      },
+      "oauth": {
+        "enabled": true
+      }
+    },
+    "lint": {
+      "command": "lint-mcp",
+      "args": ["--stdio"],
+      "cwd": ".",
+      "env": {
+        "LINT_BACKEND_TOKEN": "SECRET_SENTINEL-do-not-emit",
+        "EXPAND_TEST": "$MY_VAR"
+      },
+      "timeoutSeconds": 30,
+      "enabledTools": ["check"]
+    },
+    "disabled_srv": {
+      "serverUrl": "https://disabled.example.test/mcp",
+      "disabled": true
+    },
+    "extra_fields": {
+      "serverUrl": "https://extra.example.test/mcp",
+      "mysteryField": 123
+    }
+  }
+}
