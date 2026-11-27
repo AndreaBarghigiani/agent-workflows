@@ -56,6 +56,10 @@ const COMMANDS = new Map<string, Command>([
   ],
   ['memory_preflight', { load: () => import('../scripts/memory_preflight.ts') }],
   ['adopt_skills', { load: () => import('../scripts/adopt_skills.ts') }],
+  [
+    'setup_antigravity_mcp',
+    { load: () => import('../scripts/setup_antigravity_mcp.ts') },
+  ],
   ['mcp_configure', { load: () => import('../scripts/mcp_configure.ts') }],
   ['t3_readiness', { load: () => import('../scripts/t3_readiness.ts') }],
   ['t3_bootstrap', { load: () => import('../scripts/t3_bootstrap.ts') }],

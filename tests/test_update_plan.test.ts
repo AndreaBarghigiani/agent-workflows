@@ -445,6 +445,18 @@ describe('UpdatePlanTests', () => {
     rmSync(ctx.tmp, { recursive: true, force: true });
   });
 
+  test('reports missing Antigravity configuration without changing the upgrade', () => {
+    cpSync(
+      join(REPO, 'tests/fixtures/mcp-requirements/public-remote.json'),
+      join(ctx.project, '.agents/mcp-requirements.json'),
+    );
+    const before = fileTree(ctx.project);
+    const document = plan();
+    assert.equal(document.status, 'ready');
+    assert.match(document.notes.join('\n'), /mcp_config.json is absent/);
+    assert.deepEqual(fileTree(ctx.project), before);
+  });
+
   test('test_routine_refresh_is_ready', () => {
     const document = plan();
     assert.equal(document.status, 'ready');

@@ -2,13 +2,15 @@
  * Atomic file write matching `memory_connections.atomic` in the Python
  * original: create the parent directory, `tempfile.mkstemp` in the
  * destination directory (exclusive create, mode 0600), write the text,
- * `os.replace` onto the target, and unlink the temporary file if it is still
+ * publish it with rename, or link it for create-only writes, and unlink the
+ * temporary file if it is still
  * there after a failure.
  */
 import { randomBytes } from 'node:crypto';
 import {
   closeSync,
   existsSync,
+  linkSync,
   mkdirSync,
   openSync,
   renameSync,
@@ -17,7 +19,11 @@ import {
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-export function atomicWrite(path: string, text: string): void {
+export function atomicWrite(
+  path: string,
+  text: string,
+  options: { createOnly?: boolean } = {},
+): void {
   const directory = dirname(path);
   mkdirSync(directory, { recursive: true });
   let descriptor = -1;
@@ -35,7 +41,11 @@ export function atomicWrite(path: string, text: string): void {
     writeSync(descriptor, text);
     closeSync(descriptor);
     descriptor = -1;
-    renameSync(temporary, path);
+    if (options.createOnly) {
+      linkSync(temporary, path);
+    } else {
+      renameSync(temporary, path);
+    }
   } finally {
     if (descriptor >= 0) closeSync(descriptor);
     if (existsSync(temporary)) unlinkSync(temporary);

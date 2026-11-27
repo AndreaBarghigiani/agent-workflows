@@ -13,6 +13,7 @@
  * refuses — into data rather than exceptions — so a stopped plan still
  * says why and what the owner must resolve.
  */
+import { antigravitySetupNotice } from './lib/antigravity_setup.ts';
 import { spawnSync } from 'node:child_process';
 import {
   existsSync,
@@ -2321,6 +2322,8 @@ function buildPlan(
   phaseT3(state);
   phaseMemory(state);
   phaseFollowUps(state);
+  const mcpNotice = antigravitySetupNotice(state.project);
+  if (mcpNotice !== null) state.notes.push(mcpNotice);
   return {
     status: state.stops.length === 0 ? 'ready' : 'stop',
     stops: state.stops,

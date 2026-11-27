@@ -341,6 +341,21 @@ describe('InstallTests', () => {
     assert.equal(readText(manifest), 'not json {');
   });
 
+  test('reports missing Antigravity registration during install and check', () => {
+    install();
+    const manifest = join(ctx.project, '.agents/mcp-requirements.json');
+    cpSync(join(ROOT, 'tests/fixtures/mcp-requirements/public-remote.json'), manifest);
+    const destination = join(ctx.project, '.agents/mcp_config.json');
+    for (const check of [false, true]) {
+      assert.match(install({ check }), /mcp_config.json is absent/);
+      assert.ok(!existsSync(destination));
+    }
+    const original = '{"mcpServers":{"owner":{"serverUrl":"https://example.test/mcp"}}}\n';
+    writeText(destination, original);
+    assert.doesNotMatch(install(), /mcp_config.json is absent/);
+    assert.equal(readText(destination), original);
+  });
+
   test('test_memory_links_require_enabled_capability', () => {
     capabilities('declined');
     install(); // baseline issue-only installation
