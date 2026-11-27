@@ -157,6 +157,8 @@ Check which MCP services a project declares in `.agents/mcp-requirements.json` a
 **Example request:**
 > "Check this project's MCP requirements and align the selected services with Claude, Codex and OpenCode on this machine."
 
+Select Antigravity explicitly with `--clients antigravity` to inspect its native project configuration in `.agents/mcp_config.json`.
+
 [Read the skill](.agents/skills/configure-mcp/SKILL.md). Migration and onboarding — including tracked client files becoming consumer-owned, deselection and rollback, and two-machine setup — is covered by [docs/mcp-configure-migration.md](docs/mcp-configure-migration.md).
 
 ### `update-agent-workflows`
@@ -330,6 +332,12 @@ T3 setup is a separate opt-in for new and existing consumers. It does not
 change the library pin or selected installation. See the [worktree setup
 guide](docs/t3-checkout-readiness.md) for explicit consumer configuration,
 read-only checks and manual action import. Declining requires no T3 connection.
+
+Projects can opt in to recreating selected no-auth remote MCP registrations in
+fresh Antigravity worktrees. Track the selection in `.agents/antigravity-mcp.json`
+and add `setup_antigravity_mcp` to the existing worktree creation action. The
+helper creates the native `.agents/mcp_config.json` when absent and preserves
+existing configurations. See [Antigravity MCP worktree setup](docs/t3-checkout-readiness.md#recreate-an-antigravity-mcp-registration).
 
 For memory configuration, ask: “Read `.agent-workflows/.agents/skills/setup-basic-memory/SKILL.md` and configure Basic Memory in this checkout.” This works before the skill is linked. Verify actual skill discovery and native MCP access in each client; a setup check only verifies local artifacts. If the memory option is declined, no memory helper or MCP check is needed.
 
