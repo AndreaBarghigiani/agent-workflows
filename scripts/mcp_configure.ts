@@ -66,6 +66,7 @@
 import { createHash } from 'node:crypto';
 import {
   existsSync,
+  lstatSync,
   realpathSync,
   statSync,
   writeFileSync,
@@ -87,6 +88,7 @@ import {
   PyFloat,
   pyJsonLoads,
 } from './lib/pyloads.ts';
+import { ANTIGRAVITY_DESTINATION, ANTIGRAVITY_SETUP } from './lib/antigravity_setup.ts';
 import { readText } from './lib/pyio.ts';
 import {
   AttributeError,
@@ -482,7 +484,7 @@ export const CLIENT_PATHS: Record<string, string> = {
   claude: '.mcp.json',
   codex: '.codex/config.toml',
   opencode: 'opencode.json',
-  antigravity: '.agents/mcp_config.json',
+  antigravity: ANTIGRAVITY_DESTINATION,
 };
 export const CLAUDE_SETTINGS = '.claude/settings.local.json';
 
@@ -3838,6 +3840,185 @@ export function buildPlan(
   }
   flagDuplicateRegistrations(plan);
   return plan;
+}
+
+// --- Owner-selected Antigravity worktree setup ---------------------------------
+
+function regularProjectFile(root: string, path: string): boolean {
+  const parent = dirname(path);
+  if (parent !== '.') {
+    const directory = lstatSync(join(root, parent), { throwIfNoEntry: false });
+    if (directory && !directory.isDirectory()) {
+      throw new ValueError(`Expected a regular project directory at ${parent}`);
+    }
+  }
+  const file = lstatSync(join(root, path), { throwIfNoEntry: false });
+  if (file && !file.isFile()) {
+    throw new ValueError(`Expected a regular project file at ${path}`);
+  }
+  return file !== undefined;
+}
+
+function antigravitySourceEndpoint(root: string, id: string, source: unknown): string {
+  const client = isDict(source) ? dictGet(source, 'client') : null;
+  const name = isDict(source) ? dictGet(source, 'registration') : null;
+  if (
+    !isDict(source) ||
+    dictKeys(source).length !== 2 ||
+    (client !== 'claude' && client !== 'opencode') ||
+    typeof name !== 'string' ||
+    registrationNameProblem(name) !== null
+  ) {
+    throw new ValueError(`Invalid Antigravity source selection for ${id}`);
+  }
+  const path = CLIENT_PATHS[client];
+  if (!regularProjectFile(root, path)) {
+    throw new ValueError(`Missing Antigravity source for ${id} in ${path}`);
+  }
+  const parsed = parseClient(root, client);
+  const [entry, problems] = sourceEntry(new Map([[client, parsed]]), source);
+  const raw = rawSourceFields(root, source);
+  const url = dictGet(raw, 'url');
+  // Accept the plain project Streamable HTTP shapes used by the connection
+  // renderer. Credential and unknown fields stay manual.
+  const keys = client === 'claude' ? ['type', 'url'] : ['type', 'url', 'oauth', 'enabled'];
+  if (
+    problems.length > 0 ||
+    entry?.transport !== 'remote' ||
+    entry.enabled === false ||
+    parsed[2].shadowed?.has(name) ||
+    dictKeys(raw).some((key) => !keys.includes(key)) ||
+    dictGet(raw, 'type') !== (client === 'claude' ? 'http' : 'remote') ||
+    typeof url !== 'string' ||
+    url !== entry.url ||
+    (client === 'opencode' && (
+      dictGet(raw, 'oauth') !== false || dictGetOr(raw, 'enabled', true) !== true
+    ))
+  ) {
+    throw new ValueError(
+      `Antigravity source for ${id} must be an enabled no-auth Streamable HTTP registration`,
+    );
+  }
+  return url;
+}
+
+/** Build the complete create-only output, or return null when no write is needed. */
+export function antigravityWorktreeConfig(root: string): string | null {
+  if (!isDir(root)) throw new ValueError('Antigravity setup requires a project directory');
+  if (!regularProjectFile(root, ANTIGRAVITY_SETUP)) return null;
+  let policy: unknown;
+  try {
+    policy = jsonLoads(readText(join(root, ANTIGRAVITY_SETUP)));
+  } catch {
+    throw new ValueError(`Cannot read ${ANTIGRAVITY_SETUP} as JSON`);
+  }
+  const selected = isDict(policy) ? dictGet(policy, 'services') : null;
+  if (
+    !isDict(policy) ||
+    dictKeys(policy).length !== 2 ||
+    dictGet(policy, 'version') !== 1n ||
+    !isDict(selected) ||
+    dictKeys(selected).length === 0
+  ) {
+    throw new ValueError(
+      `Expected version 1 and a nonempty services object in ${ANTIGRAVITY_SETUP}`,
+    );
+  }
+
+  const target = CLIENT_PATHS.antigravity;
+  const targetExists = regularProjectFile(root, target);
+  regularProjectFile(root, mcpRequirements.MANIFEST);
+  const [, services] = manifestOf(root);
+  const byId = new Map(services.map((service) => [dictGet(service, 'id'), service]));
+  const mapping = new Map<string, unknown>();
+  const endpoints = new Map<string, string>();
+  const localRefs = new Map<string, { endpoint: string }>();
+  for (const [id, spec] of dictItems(selected)) {
+    const service = byId.get(id);
+    if (!service) {
+      throw new ValueError('Every Antigravity setup selection must name a service in a valid MCP requirements manifest');
+    }
+    const name = isDict(spec) ? dictGet(spec, 'registration') : null;
+    if (
+      !isDict(spec) ||
+      registrationNameProblem(name) !== null ||
+      dictKeys(spec).some((key) => key !== 'registration' && key !== 'source')
+    ) {
+      throw new ValueError(`Invalid Antigravity setup selection for ${id}`);
+    }
+    const connection = dictGet(service, 'connection');
+    if (
+      !isDict(connection) ||
+      dictGet(connection, 'type') !== 'remote' ||
+      dictHas(connection, 'auth') ||
+      antigravityRemoteAuthUnsupported(service)
+    ) {
+      throw new ValueError(`Antigravity setup for ${id} requires a no-auth remote service`);
+    }
+
+    const url = dictGet(connection, 'url');
+    const source = dictGet(spec, 'source');
+    let endpoint: string;
+    if (source === undefined) {
+      if (typeof url !== 'string') {
+        throw new ValueError(`Antigravity setup for ${id} requires a project source for its local connection`);
+      }
+      endpoint = url;
+    } else {
+      const ref = dictGet(connection, 'local_config_ref');
+      if (typeof ref !== 'string') {
+        throw new ValueError(`Antigravity setup for ${id} must use its portable manifest URL`);
+      }
+      endpoint = antigravitySourceEndpoint(root, id, source);
+      const previous = localRefs.get(ref);
+      if (previous && previous.endpoint !== endpoint) {
+        throw new ValueError(`Conflicting Antigravity sources for ${id}`);
+      }
+      localRefs.set(ref, { endpoint });
+    }
+    if ([...endpoints.values()].some((url) => equivalentUrl(url, endpoint))) {
+      throw new ValueError(`Antigravity setup for ${id} duplicates another selected endpoint`);
+    }
+    endpoints.set(id, endpoint);
+    mapping.set(id, { antigravity: name });
+  }
+
+  const plan = buildPlan(root, mapping, [...mapping.keys()], {
+    clients: ['antigravity'],
+    machine: { local_config_refs: localRefs },
+  });
+  const actions = dictGet(plan, 'actions') as Dict[];
+  if (actions.length !== mapping.size) {
+    throw new ValueError('MCP requirements changed during Antigravity setup; retry after review');
+  }
+  const servers = new Map<string, unknown>();
+  for (const action of actions) {
+    const kind = dictGet(action, 'action');
+    const id = dictGet(action, 'service');
+    if (kind === 'reuse') {
+      if (!targetExists) {
+        throw new ValueError('Antigravity destination appeared during setup; retry after review');
+      }
+      continue;
+    }
+    if (kind !== 'add') {
+      throw new ValueError(`Antigravity setup for ${id}: ${kind}; inspect with mcp_configure and resolve explicitly`);
+    }
+    if (targetExists) {
+      throw new ValueError(`Antigravity registration for ${id} is missing; existing ${target} is preserved. Use a reviewed mcp_configure plan to add it`);
+    }
+    const entry = dictGet(action, 'entry');
+    if (
+      !isDict(entry) ||
+      typeof dictGet(entry, 'serverUrl') !== 'string' ||
+      dictGet(entry, 'serverUrl') !== endpoints.get(id as string) ||
+      (dictGet(action, 'prerequisites') as string[]).length > 0
+    ) {
+      throw new ValueError(`Antigravity setup for ${id} requires a resolved no-auth endpoint`);
+    }
+    servers.set(dictGet(action, 'registration') as string, entry);
+  }
+  return servers.size === 0 ? null : `${jsonDumps({ mcpServers: servers })}\n`;
 }
 
 // --- Apply --------------------------------------------------------------------

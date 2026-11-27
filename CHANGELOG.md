@@ -9,6 +9,8 @@ numbering restarts here.
 
 ## [Unreleased]
 
+- Install and update planning detect missing Antigravity project registration. Projects can opt into recreating selected no-auth remote registrations in the existing T3 creation action without modifying existing MCP configuration.
+
 ## [0.2.0] - 2026-11-26
 
 Run Antigravity Gemini delegates through T3 Code and align MCP services into Antigravity's workspace configuration.

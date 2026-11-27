@@ -188,6 +188,68 @@ verification, and reports what changed; review the diff and commit it
 yourself. Migrations that retire routing artifacts run the same check before
 completing; see [the memory migration guide](memory/migration.md).
 
+## Recreate an Antigravity MCP registration
+
+Install and update planning report when a project declares MCP services and
+`.agents/mcp_config.json` is absent. To have the creation-time action restore
+selected Antigravity registrations, review a redacted `mcp_configure plan`
+with Antigravity as the only destination. Include the source client in
+`--clients` when the plan reads a source registration. Then explicitly
+approve and track the selection in
+`.agents/antigravity-mcp.json` alongside the MCP requirements manifest. Review
+changes to the selection or its source connection before using them in new
+worktrees. The selection contains service IDs and registration names only.
+
+```json
+{
+  "version": 1,
+  "services": {
+    "basic-memory": {
+      "registration": "basic_memory_nas",
+      "source": {"client": "claude", "registration": "basic_memory_nas"}
+    }
+  }
+}
+```
+
+Use the service ID declared in `.agents/mcp-requirements.json`. Omit `source`
+for a service with a portable no-auth URL in its manifest declaration. A
+service with a `local_config_ref` can use an explicitly selected project
+registration in Claude's `.mcp.json` or OpenCode's `opencode.json`. The source
+must be an enabled, plain Streamable HTTP registration with a reviewed,
+credential-free endpoint. For OpenCode the registration must explicitly
+set `"oauth": false`, as the Basic Memory renderer does. OAuth, bearer or
+API-key auth, credential references, stdio, and source headers require
+separate manual configuration. Never put credentials in the endpoint or
+in the selection.
+
+Append the command to the **existing synchronous creation-time action**.
+For a project that restores Basic Memory connections, run it after those
+connections are rendered:
+
+```bash
+node .agent-workflows-t3.mjs && \
+  node .agent-workflows/bin/agent-workflows.ts setup_memory_connections --project . && \
+  node .agent-workflows/bin/agent-workflows.ts setup_antigravity_mcp --project .
+```
+
+Use the project's pinned library path. Update the effective action in T3
+project settings and keep the tracked action candidate in sync if you use
+one. Keep the generated `.agents/mcp_config.json` ignored if the intended
+behavior is to recreate it per checkout. The helper creates the complete
+file only when absent. A matching existing configuration is reused
+byte-for-byte, including unrelated settings. An existing file missing a
+selected registration, a conflicting registration or an unsupported
+connection fails setup and preserves the file. Use an explicitly confirmed
+`mcp_configure` plan for additions or changes to an existing file. Without
+the selection file, the setup command exits successfully without writing.
+
+Run `setup_antigravity_mcp --project . --check` through the dispatcher for a
+read-only check after preparing any selected source. It reports when the
+file would need creation or the selection cannot be satisfied. Verify actual
+tool availability separately in a fresh Antigravity session. For Basic
+Memory, use a bounded read scoped to the project's configured routing.
+
 ## Import and verify separately
 
 Issue #34 qualified the fallback in

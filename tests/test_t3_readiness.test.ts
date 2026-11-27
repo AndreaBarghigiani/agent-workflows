@@ -176,6 +176,7 @@ async function makeFixture(
   options: {
     pinMode?: 'mixed' | 'python-only';
     omitPin?: string[];
+    dispatcher?: boolean;
     /** Stub `.py` files written into the pin before it is committed. */
     stubPin?: string[];
   } = {},
@@ -203,6 +204,9 @@ async function makeFixture(
     cpSync(join(REPO, 'scripts'), join(source, 'scripts'), {
       recursive: true,
     });
+  }
+  if (options.dispatcher) {
+    cpSync(join(REPO, 'bin'), join(source, 'bin'), { recursive: true });
   }
   for (const name of options.omitPin ?? []) {
     rmSync(join(source, 'scripts', name), { force: true });
@@ -1328,6 +1332,61 @@ test('test_end_to_end_drift_repair_then_fresh_worktree_bootstrap', async (t) => 
     readFileSync(join(worktree, '.agents/memory/config.md')),
     Buffer.from(generated, 'utf8'),
   );
+});
+
+test('composed readiness action restores a no-auth Antigravity registration in a fresh worktree', async (t) => {
+  const f = await makeFixture({ dispatcher: true });
+  t.after(() => rmSync(f.tmp, { recursive: true, force: true }));
+  await enableGeneratedMemory(f, RELOCATED, true, ['claude']);
+  const ignore = join(f.root, '.gitignore');
+  writeText(ignore, readFileSync(ignore, 'utf8') + '/.mcp.json\n/.agents/mcp_config.json\n');
+
+  const manifest = JSON.parse(readFileSync(
+    join(REPO, 'tests/fixtures/mcp-requirements/basic-memory.json'), 'utf8',
+  ));
+  manifest.services[0].guidance = ['AGENTS.md'];
+  writeText(join(f.root, '.agents/mcp-requirements.json'), JSON.stringify(manifest));
+  writeText(join(f.root, '.agents/antigravity-mcp.json'), JSON.stringify({
+    version: 1,
+    services: {
+      'basic-memory': {
+        registration: 'basic_memory',
+        source: { client: 'claude', registration: 'basic_memory' },
+      },
+    },
+  }));
+  const cli = 'node .agent-workflows/bin/agent-workflows.ts';
+  const actionPath = join(f.root, 't3.json');
+  const data = JSON.parse(readFileSync(actionPath, 'utf8'));
+  data.scripts[0].command +=
+    ` && ${cli} setup_memory_connections --project .` +
+    ` && ${cli} setup_antigravity_mcp --project .`;
+  writeText(actionPath, JSON.stringify(data, null, 2) + '\n');
+  await readiness.check_action(f.root);
+  runGit(f.root, ['add', '-A']);
+  commit(f.root, 'tracked opt-in and composed action');
+
+  const endpoint = 'https://memory.example.test/mcp';
+  const home = join(f.tmp, 'home');
+  const configHome = join(home, '.config');
+  writeText(
+    join(configHome, 'agent-workflows/memory-connection.toml'),
+    `schema_version = 1\nendpoint = "${endpoint}"\n`,
+  );
+  const worktree = join(f.tmp, 'antigravity-worktree');
+  runGit(f.root, ['worktree', 'add', '--detach', worktree, 'HEAD']);
+  const target = join(worktree, '.agents/mcp_config.json');
+  assert.equal(existsSync(target), false);
+  const run = spawnSync('sh', ['-c', data.scripts[0].command], {
+    cwd: worktree,
+    encoding: 'utf8',
+    env: { ...process.env, HOME: home, XDG_CONFIG_HOME: configHome, GIT_ALLOW_PROTOCOL: 'file' },
+  });
+  assert.equal(statusOf(run), 0, run.stderr);
+  assert.deepEqual(JSON.parse(readFileSync(target, 'utf8')), {
+    mcpServers: { basic_memory: { serverUrl: endpoint } },
+  });
+  assert.equal(existsSync(join(f.root, '.agents/mcp_config.json')), false);
 });
 
 // --- Cross-port migration coverage (issue #117; no Python counterpart) ----

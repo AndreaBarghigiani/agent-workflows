@@ -142,6 +142,9 @@ Verified in fresh `gemini-4-neon` children (`delegate_task`):
   children to look via `call_mcp_tool` and wait and re-check before
   concluding a project MCP server is missing; this is an upstream timing
   limitation (Antigravity ACP `1.5.18`).
+- **Worktree registration setup:** A project can explicitly select no-auth
+  remote registrations for its existing T3 creation action to restore. See
+  [T3 worktree setup](t3-checkout-readiness.md#recreate-an-antigravity-mcp-registration).
 - **`configure-mcp` support (documented / runtime-verified):**
   [configure-mcp](../.agents/skills/configure-mcp/SKILL.md)
   (`mcp_configure --clients antigravity`) aligns stdio, no-auth remote, and

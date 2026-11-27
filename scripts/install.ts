@@ -21,6 +21,7 @@
  * registered submodule of the project, the helper also keeps it detached
  * at the consumer's recorded pin (see consumer_pin).
  */
+import { antigravitySetupNotice } from './lib/antigravity_setup.ts';
 import { createHash } from 'node:crypto';
 import {
   existsSync,
@@ -2004,6 +2005,8 @@ export function install(
       console.log('existing delivery profiles preserved');
     }
   }
+  const mcpNotice = antigravitySetupNotice(resolvedProject);
+  if (mcpNotice !== null) console.log(mcpNotice);
   if (pin !== null) {
     const state = consumer_pin(source, resolvedProject, runGitImpl);
     if (
