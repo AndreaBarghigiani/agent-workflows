@@ -9,7 +9,11 @@ numbering restarts here.
 
 ## [Unreleased]
 
-- Install and update planning detect missing Antigravity project registration. Projects can opt into recreating selected no-auth remote registrations in the existing T3 creation action without modifying existing MCP configuration.
+## [0.2.1] - 2026-11-27
+
+### Fixed
+
+- Fresh T3 worktrees can recreate selected no-auth Antigravity MCP registrations when a project opts in. Install and update planning report missing registration files, and setup preserves existing MCP configurations. See the [worktree setup guide](docs/t3-checkout-readiness.md#recreate-an-antigravity-mcp-registration) and [PR #7](https://github.com/AndreaBarghigiani/agent-workflows/pull/7).
 
 ## [0.2.0] - 2026-11-26
 
